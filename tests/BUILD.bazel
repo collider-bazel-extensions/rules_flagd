@@ -228,6 +228,13 @@ flagd_test(
     flags = ["//tests/testdata:flags"],
 )
 
+# A restart that can't get its ports back: the 500, the retry.
+flagd_test(
+    name = "restart_failure_test",
+    srcs = ["restart_failure_test.sh"],
+    flags = ["//tests/testdata:flags"],
+)
+
 # flagd_server as a rules_itest service, twice: the second replica via
 # FLAGD_INSTANCE.
 flagd_server(
@@ -315,3 +322,16 @@ sh_test(
 )
 
 analysis_test_suite(name = "analysis_tests")
+
+sh_test(
+    name = "readme_version_test",
+    srcs = ["readme_version_test.sh"],
+    args = [
+        "$(rootpath //:MODULE.bazel)",
+        "$(rootpath //:README.md)",
+    ],
+    data = [
+        "//:MODULE.bazel",
+        "//:README.md",
+    ],
+)

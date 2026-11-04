@@ -6,7 +6,7 @@ Bazel rules for [flagd](https://flagd.dev), the [OpenFeature](https://openfeatur
   - `flagd_flags` — flag definition files (JSON or YAML). flagd itself loads each file as a validation action, so a file it would refuse fails `bazel build`. By default, so does a schema violation, which flagd on its own only logs and then serves anyway.
   - `flagd_flags_test` — evaluation tests: a flag plus a context gives an expected value, variant, reason or error. Results go to Bazel as JUnit XML.
 - **Hermetic server (test time)**
-  - `flagd_server` — a long-running flagd on free ports; writes `$TEST_TMPDIR/<name>.env` once `/readyz` answers.
+  - `flagd_server` — a long-running flagd on free ports; writes `$TEST_TMPDIR/<name>.env` once `/readyz` answers and every port is up.
   - `flagd_health_check` — pairs with `flagd_server` for `itest_service`.
   - `flagd_test` — `sh_test` macro with an auto-launched flagd and helpers to evaluate flags and change them at runtime.
 - **Cluster install (kind / production-shaped)**
@@ -18,11 +18,11 @@ No host `flagd` or Go needed: the binary comes from the pinned, SHA-256-verified
 ## Install (Bzlmod)
 
 ```python
-bazel_dep(name = "rules_flagd", version = "0.1.0")
+bazel_dep(name = "rules_flagd", version = "0.3.0")
 git_override(
     module_name = "rules_flagd",
     remote = "https://github.com/collider-bazel-extensions/rules_flagd",
-    tag = "v0.2.0",
+    tag = "v0.3.0",
 )
 
 # rules_flagd depends on rules_kubectl, which isn't in the BCR either.
@@ -42,7 +42,7 @@ flagd = use_extension("@rules_flagd//:extensions.bzl", "flagd")
 flagd.version(version = "0.17.1")   # pinned: 0.18.2, 0.17.1
 ```
 
-The toolchain and the image `flagd_install` deploys both follow it, so tests and the cluster run the same flagd. Upgrading from v0.1: the `use_repo(flagd, "flagd_0_18_2_…")` lines are no longer needed. They still work, for the selected version.
+The toolchain and the image `flagd_install` deploys both follow it, so tests and the cluster run the same flagd. Upgrading from v0.1 or v0.2: delete any `use_repo(flagd, "flagd_0_18_2_…")` lines; they're no longer needed. Since v0.3.0 those v0.1 names exist only on request, so a leftover line fails with Bazel's `does not generate repository "flagd_0_18_2_linux_amd64"`. To keep them for now, use `flagd.version(version = "...", v01_repo_names = True)`.
 
 To pin by archive and integrity instead of a git tag, replace the first `git_override` with:
 
@@ -157,7 +157,7 @@ What the test sees:
 | `flagd_set_flag KEY FLAG_JSON` | adds or replaces one override |
 | `flagd_set_flags FILE.json` | replaces all overrides with the file's `flags` |
 | `flagd_clear_flags` | removes every override |
-| `flagd_stop` / `flagd_start` | stops flagd / starts it again **on the same ports, with the same sources and overrides**, and waits until it's ready |
+| `flagd_stop` / `flagd_start` | stops flagd / starts it again **on the same ports, with the same sources and overrides**, and waits until it's ready. If another process has taken one of the ports, the start retries 5 times, 0.2 s apart, then fails naming the port, e.g. `another process holds ofrep 41237 (address already in use)`. The server stays up, so `flagd_start` can be tried again. |
 | `flagd_start_instance ID` | starts another replica of this test's `flagd_server`, with its own ports and overrides; prints its env file |
 | `flagd_use ENV_FILE` | points the helpers (and every `FLAGD_*` variable) at a replica; `flagd_use "$FLAGD_MAIN_ENV_FILE"` goes back |
 | `flagd_on ENV_FILE CMD…` | runs one command against a replica, e.g. `flagd_on "$b" flagd_variant rollout "$ctx"` |
@@ -167,7 +167,7 @@ What the test sees:
 | `flagd_test` / `flagd_server` argument | Default | |
 |---|---|---|
 | `flags` | `[]` | `flagd_flags` targets, merged in order |
-| `ready_timeout` | `30` | seconds to wait for `/readyz` |
+| `ready_timeout` | `30` | seconds to wait until flagd is ready (`/readyz` and every port) |
 | `extra_args` | `[]` | extra `flagd start` flags, e.g. `["-X", "env=ci"]` (a static context value) or `["--debug"]` |
 | `args`, `env`, `data`, `deps`, `size`, `timeout`, `tags`, … | | as for `sh_test` (`flagd_test` only) |
 
@@ -213,7 +213,9 @@ itest_service(
 )
 ```
 
-`POST $FLAGD_CONTROL_URL/stop` and `/start` restart a server from any language.
+`POST $FLAGD_CONTROL_URL/stop` and `/start` restart a server from any language. A failed `/start` returns 500 with the reason.
+
+**Interfaces.** flagd has no option to choose the address it listens on, only the ports, so the hermetic server listens on all interfaces, not just `127.0.0.1`. The env file points clients at `127.0.0.1`. Ports are free ones chosen at start-up, and checked again, by binding them as flagd will, before every start and restart.
 
 ## Cluster install
 

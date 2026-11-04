@@ -12,11 +12,11 @@ rules_flagd follows the shape of rules_prometheus and rules_alertmanager: a tool
 
 Each release tarball holds a single binary named `flagd_<os>_<arch>`. The repository rule finds that one file and links it as `flagd`. flagd publishes no checksum file. The pins are therefore GitHub's per-asset `digest`, and `tools/update_checksums.sh` cross-checks each one against a download. Each version's image is pinned by its multi-arch index digest (`FLAGD_IMAGES`), which the same script fetches from ghcr.io.
 
-**Choosing the version (v0.2, #1).** In v0.1 `toolchain/BUILD.bazel` named the `flagd_0_18_2_*` repos and the version string, so `flagd.version()` could only select 0.18.2. Now:
+**Choosing the version (v0.2, #1; v0.3, #3).** In v0.1 `toolchain/BUILD.bazel` named the `flagd_0_18_2_*` repos and the version string, so `flagd.version()` could only select 0.18.2. Now:
 - **Repos named per platform:** `flagd_<platform>`. Each one declares its own `flagd_toolchain` with the version and that version's image.
 - **The root module's tag wins**, else rules_flagd's own, else `DEFAULT_VERSION`. This is the scheme rules_otel and rules_gitleaks use.
 - **The install follows it:** `flagd_manifest` takes its default image from the resolved toolchain. A consumer running flagd 0.17.1 in its cluster pins `flagd.version(version = "0.17.1")`, and tests and the install use the same version. `tests/version_select/`, a separate consumer module that CI runs, checks both.
-- **v0.1 names still resolve.** The extension also creates the `flagd_<ver>_<plat>` names for the selected version, so a v0.1 consumer's `use_repo(...)` keeps working. Repos are only fetched when used.
+- **v0.1 names on request.** v0.2 also created the `flagd_<ver>_<plat>` names for the selected version, so a v0.1 consumer's `use_repo(...)` kept working. They're fetched only when used, but every repo an extension creates is recorded in consumers' `MODULE.bazel.lock`. An extension can't see which names the root imports, so it can't create them only when needed. Since v0.3.0 they need `flagd.version(..., v01_repo_names = True)`; without it, a leftover `use_repo` fails with Bazel's "does not generate repository" naming the repo.
 
 Pinned versions: 0.18.2 (default) and 0.17.1.
 
@@ -43,7 +43,7 @@ Keeping ties matters for variants of mixed types: "off isn't a boolean" and "on 
 
 ## Hermetic server
 
-- **Ports.** The launcher picks four free ports: evaluation, management, sync and OFREP. It retries with new ones on a clash, except on a restart (below). Ready means `GET /readyz` on the management port returns 200. If flagd refuses its flags at start, the launcher fails at once, without waiting for the timeout.
+- **Ports.** The launcher picks four free ports: evaluation, management, sync and OFREP. Before every start it binds each port the way flagd will (all interfaces, `SO_REUSEADDR`), and retries with new ones on a clash; a restart keeps its ports (below). Ready means `GET /readyz` on the management port returns 200 and the other three ports answer HTTP. If flagd refuses its flags at start, the launcher fails at once, without waiting for the timeout.
 - **Environment.** `FLAGD_HOST` / `FLAGD_PORT` are the variables OpenFeature's flagd providers read, so a service under test finds the server with no code changes. In return, the server itself runs without any `FLAGD_*` from its caller, because flagd reads those as configuration. `HOME` points at the state dir, so a user's `~/.agent.yaml` can't configure it either.
 - **fsnotify sources.** Sources are passed with `--sources` using the `fsnotify` provider. The default `file:` provider polls once a second. With fsnotify a change applies in about 10 ms, which keeps the override helpers fast.
 
@@ -62,6 +62,11 @@ Tests of fractional assignment need flagd restarted mid-test, and a second flagd
 
 - **Restart.** The launcher runs a small HTTP control endpoint (`FLAGD_CONTROL_URL`, `POST /stop` and `/start`), as rules_otel does.
   - `/start` runs flagd again with the same sources, the same overrides file and the **same ports**, so the env file stays valid and providers reconnect. A port taken in the meantime is an error, not a silent move to new ports.
+  - **Retries (v0.3, #3).** Another process may hold a port only briefly; on a busy CI host the gap between stop and start is a real window. So `/start` checks the ports and retries 5 times, 0.2 s apart, before returning 500 naming the taken port. A port taken between the check and flagd's own bind is caught too.
+  - **Why check before starting.** When a listener can't bind, flagd doesn't exit at once. It logs "shutting down …", drains for **5 s**, and only then logs the fatal `address already in use`. Without the check every failed attempt would cost 5 s, and a briefly held port would never be retried in time. Seen in the first version of `restart_failure_test`. As a backstop, the launcher kills flagd as soon as it logs "shutting down" before it is ready.
+  - **Ready means every port.** `/readyz` on the management port can answer before another listener has failed to bind. So readiness also needs the evaluation, sync and OFREP ports to answer HTTP; a port held by another process doesn't.
+  - **Each attempt reads only its own log.** A restart appends to `flagd.log`, so errors from an earlier run can't be mistaken for this one's.
+  - **Interfaces.** flagd binds all interfaces (`:<port>`); 0.17 and 0.18 have no option for the address, so binding the server to `127.0.0.1` isn't possible. The pre-start check binds the same way, so a listener on any address counts as taken.
   - A requested stop doesn't count as a crash. Only an exit the test didn't ask for stops the server.
   - HTTP rather than signals, because `/start` must report whether flagd became ready again.
 - **Replicas.** `FLAGD_INSTANCE=<id>` in the server's environment makes it a separate replica: env file `<name>@<id>.env`, state directory `flagd-<name>@<id>`, its own ports and overrides.

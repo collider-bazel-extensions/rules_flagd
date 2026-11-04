@@ -17,9 +17,10 @@
       OFREP) and starts `flagd start` with writable copies of the sources
       in order, plus an overrides source last (highest precedence) for
       the test helpers. Records which source defines each key in
-      <state-dir>/sources.json. Retries on a port clash, up to 5 times. Once
-      GET /readyz on the management port answers 200, writes the env
-      file atomically:
+      <state-dir>/sources.json. Ports are bind-checked before flagd starts;
+      a clash retries with new ports, up to 5 times. Once GET /readyz on
+      the management port answers 200 and every other port answers HTTP,
+      writes the env file atomically:
         FLAGD_HOST=127.0.0.1
         FLAGD_PORT=<evaluation port>   (OpenFeature flagd providers, RPC)
         FLAGD_SYNC_PORT=<sync port>    (in-process providers)
@@ -40,6 +41,7 @@ time is an error that names the cause and prints flagd's log.
 """
 
 import argparse
+import errno
 import json
 import os
 import shutil
@@ -55,6 +57,12 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _REFUSED = "error setting state"
+_IN_USE = "address already in use"
+_SHUTTING_DOWN = "shutting down"
+# Start attempts: new free ports each time on a first start; the same
+# ports, _RESTART_DELAY apart, on a restart.
+_RESTART_ATTEMPTS = 5
+_RESTART_DELAY = 0.2
 _SCHEMA = "does not conform to the schema"
 
 
@@ -87,6 +95,37 @@ def _ready(port):
         return False
 
 
+def _answers_http(port):
+    """True if something on the port answers HTTP (any status). flagd's
+    listeners all do; a port another process holds without serving (or a
+    listener flagd hasn't opened yet) doesn't."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/", timeout=0.5):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except (urllib.error.URLError, OSError):
+        return False
+
+
+def _all_ready(ports):
+    """/readyz on the management port, and every other port answering.
+    /readyz alone can answer before another listener fails to bind (and
+    flagd exits), which would pass off a port another process holds."""
+    return _ready(ports["management"]) and all(
+        _answers_http(ports[k]) for k in ("evaluation", "sync", "ofrep"))
+
+
+def _read_from(path, offset):
+    """The log from byte `offset` on (this attempt's part)."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(offset)
+            return f.read().decode("utf-8", "replace")
+    except OSError:
+        return "(no log)"
+
+
 def _read(path):
     try:
         with open(path) as f:
@@ -105,18 +144,60 @@ def flagd_env(home):
     return env
 
 
+def _bindable(port):
+    """Whether flagd could listen on `port`: bind it as flagd does, on all
+    interfaces (dual-stack where available) with SO_REUSEADDR, so a
+    listener on 127.0.0.1 or any other address counts as taken."""
+    for family, addr in ((socket.AF_INET6, "::"), (socket.AF_INET, "")):
+        try:
+            s = socket.socket(family)
+        except OSError:
+            continue
+        try:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            if family == socket.AF_INET6:
+                s.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            s.bind((addr, port))
+            return True
+        except OSError as e:
+            if e.errno == errno.EADDRINUSE:
+                return False
+            continue  # e.g. IPv6 disabled: try IPv4
+        finally:
+            s.close()
+    return True
+
+
+def _taken(ports):
+    return [f"{name} {port}" for name, port in ports.items() if not _bindable(port)]
+
+
 def start(flagd, sources, state_dir, ready_timeout, extra, procs, fixed_ports=None):
-    """Start flagd and wait until /readyz answers 200. Returns
+    """Start flagd and wait until it is ready on every port. Returns
     (proc, ports, log_path); ports maps evaluation/management/sync/ofrep.
-    With fixed_ports (a restart), uses those and doesn't retry a clash."""
+
+    Ports are checked before flagd starts: when a listener can't bind,
+    flagd shuts down gracefully, which takes 5 s, and only then logs why.
+    A first start retries a clash with new free ports. A restart
+    (fixed_ports) keeps its ports and retries them, _RESTART_DELAY apart,
+    then fails naming the taken ports. Each attempt reads only its own
+    part of the log, which a restart appends to."""
     log_path = os.path.join(state_dir, "flagd.log")
     env = flagd_env(os.path.join(state_dir, "home"))
-    for attempt in range(1, 6):
+    taken = []
+    for attempt in range(1, _RESTART_ATTEMPTS + 1):
+        if attempt > 1 and fixed_ports:
+            time.sleep(_RESTART_DELAY)
         if fixed_ports:
             ports = dict(fixed_ports)
         else:
             ev, mgmt, sync, ofrep = _free_ports(4)
             ports = {"evaluation": ev, "management": mgmt, "sync": sync, "ofrep": ofrep}
+        taken = _taken(ports)
+        if taken:
+            _log(f"port taken: {', '.join(taken)} (attempt {attempt}); "
+                 + ("retrying" if attempt < _RESTART_ATTEMPTS else "giving up"))
+            continue
         ev, mgmt, sync, ofrep = ports["evaluation"], ports["management"], ports["sync"], ports["ofrep"]
         cmd = [flagd, "start", "-p", str(ev), "-m", str(mgmt), "-g", str(sync), "-r", str(ofrep)]
         # fsnotify: changes apply in ~10 ms; the default `file:` provider
@@ -125,39 +206,50 @@ def start(flagd, sources, state_dir, ready_timeout, extra, procs, fixed_ports=No
             cmd += ["--sources", json.dumps([{"uri": s, "provider": "fsnotify"} for s in sources])]
         cmd += extra
         with open(log_path, "a" if fixed_ports else "w") as log:
+            offset = os.path.getsize(log_path)  # bytes: what earlier runs wrote
             proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT,
                                     stdin=subprocess.DEVNULL, env=env)
         procs.append(proc)
         deadline = time.monotonic() + ready_timeout
-        refused = False
+        refused = shutting_down = False
         while time.monotonic() < deadline:
             if proc.poll() is not None:
                 break
-            if _ready(mgmt):
+            if _all_ready(ports) and proc.poll() is None:
                 return proc, ports, log_path
-            if _REFUSED in _read(log_path):
+            out = _read_from(log_path, offset)
+            if _REFUSED in out:
                 refused = True
                 break
+            # Shutting down before it was ready: a listener failed (a port
+            # taken between the check and flagd's bind). Don't wait out
+            # flagd's 5 s graceful shutdown.
+            if _SHUTTING_DOWN in out or _IN_USE in out:
+                shutting_down = True
+                break
             time.sleep(0.05)
-        timed_out = proc.poll() is None and not refused
+        timed_out = proc.poll() is None and not refused and not shutting_down
         if proc.poll() is None:
             proc.kill()
             proc.wait()
-        out = _read(log_path)
-        if fixed_ports and "address already in use" in out:
-            raise Failed(f"flagd could not listen on its ports again ({ports}); "
-                         f"another process took one. flagd log:\n{out}")
+        out = _read_from(log_path, offset)
         if refused or _REFUSED in out:
             raise Failed("flagd refused the flags:\n" + _refusal(out))
-        if timed_out:
-            raise Failed(f"flagd was not ready (GET /readyz) within {ready_timeout:g}s. "
-                         f"flagd log:\n{out}")
-        if "address already in use" in out and attempt < 5:
-            _log(f"a port was taken (attempt {attempt}); retrying")
+        taken = _taken(ports)
+        if taken or _IN_USE in out:
+            _log(f"port taken: {', '.join(taken) or 'see the log'} (attempt {attempt}); "
+                 + ("retrying" if attempt < _RESTART_ATTEMPTS else "giving up"))
             continue
+        if timed_out:
+            raise Failed(f"flagd was not ready (GET /readyz and every port answering) within "
+                         f"{ready_timeout:g}s. flagd log:\n{out}")
         raise Failed(f"flagd exited with status {proc.returncode} before it was ready. "
                      f"flagd log:\n{out}")
-    raise Failed("flagd could not get free ports after 5 attempts")
+    if fixed_ports:
+        raise Failed(f"flagd could not listen on its ports again after {_RESTART_ATTEMPTS} "
+                     f"attempts {_RESTART_DELAY:g}s apart: another process holds "
+                     f"{', '.join(taken) or 'one of them'} (address already in use)")
+    raise Failed(f"flagd could not get free ports after {_RESTART_ATTEMPTS} attempts")
 
 
 def _refusal(log):
