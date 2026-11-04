@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# flagd_health_check — exits 0 iff the paired flagd_server has written its
+# env file (it does so only after GET /readyz answers 200).
+set -euo pipefail
+
+env_file="${TEST_TMPDIR:-${TMPDIR:-/tmp}}/__ENV_FILE_NAME__"
+if [[ -f "$env_file" ]]; then
+  exit 0
+fi
+echo "[flagd_health_check] env file not yet present: $env_file" >&2
+exit 1

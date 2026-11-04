@@ -1,0 +1,79 @@
+"""Full E2E install smoke for flagd_install.
+
+Composition (3-link itest dep chain):
+  kind_svc → flagd_install_svc → smoke_test
+
+Installs the in-tree test flags into namespace `features` (not the
+default `flagd`, to check `namespace` is honoured), then evaluates them
+through `kubectl port-forward svc/flagd`.
+"""
+
+load("@rules_flagd//:defs.bzl", "flagd_install", "flagd_install_health_check")
+load("@rules_itest//:itest.bzl", "itest_service", "service_test")
+load("@rules_kind//:defs.bzl", "kind_cluster", "kind_health_check")
+load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+kind_cluster(name = "cluster", k8s_version = "1.35")
+
+kind_health_check(name = "cluster_health", cluster = ":cluster")
+
+itest_service(
+    name = "kind_svc",
+    exe = ":cluster",
+    health_check = ":cluster_health",
+    # Let rules_kind finish `kind delete` itself instead of leaving it to
+    # its reaper after the test (rules_itest's default is 1s).
+    shutdown_timeout = "300s",
+    tags = ["manual"],
+)
+
+flagd_install(
+    name = "flagd_install_bin",
+    flags = ["//tests/testdata:flags"],
+    namespace = "features",
+    tags = ["manual"],
+)
+
+flagd_install_health_check(
+    name = "flagd_health_bin",
+    namespace = "features",
+    tags = ["manual"],
+)
+
+sh_binary(
+    name = "flagd_install_wrapper",
+    srcs = ["install_wrapper.sh"],
+    data = [":flagd_install_bin"],
+)
+
+sh_binary(
+    name = "flagd_health_wrapper",
+    srcs = ["health_wrapper.sh"],
+    data = [":flagd_health_bin"],
+)
+
+itest_service(
+    name = "flagd_install_svc",
+    exe = ":flagd_install_wrapper",
+    deps = [":kind_svc"],
+    health_check = ":flagd_health_wrapper",
+    tags = ["manual"],
+)
+
+sh_test(
+    name = "smoke_test_bin",
+    srcs = ["smoke_test.sh"],
+    tags = ["manual"],
+)
+
+service_test(
+    name = "smoke_test",
+    services = [":flagd_install_svc"],
+    test = ":smoke_test_bin",
+    tags = [
+        "manual",
+        "no-sandbox",
+        "requires-network",
+    ],
+)

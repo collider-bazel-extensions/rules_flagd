@@ -1,0 +1,22 @@
+load("@rules_flagd//:defs.bzl", "flagd_flags")
+
+package(default_visibility = ["//tests:__subpackages__"])
+
+exports_files(glob(["**"]))
+
+flagd_flags(
+    name = "base",
+    srcs = ["flags/base.json"],
+)
+
+# base.json, then overrides.yaml (which replaces `color`).
+flagd_flags(
+    name = "flags",
+    srcs = ["flags/overrides.yaml"],
+    deps = [":base"],
+)
+
+flagd_flags(
+    name = "by_env",
+    srcs = ["flags/by_env.json"],
+)

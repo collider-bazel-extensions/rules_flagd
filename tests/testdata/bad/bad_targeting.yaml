@@ -1,0 +1,6 @@
+flags:
+  x:
+    state: ENABLED
+    variants: {on: true, off: false}
+    defaultVariant: off
+    targeting: {"if": [{"no_such_op": [1]}, "on", "off"]}

@@ -1,0 +1,260 @@
+"""In-tree tests for rules_flagd (no container runtime needed; the cluster
+install smoke lives in tests/install_smoke)."""
+
+load("@rules_flagd//:defs.bzl",
+    "flagd_flags_test",
+    "flagd_health_check",
+    "flagd_manifest",
+    "flagd_server",
+    "flagd_test",
+)
+load("@rules_itest//:itest.bzl", "itest_service", "service_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+load(":analysis_tests.bzl", "analysis_test_suite")
+
+_TESTLIB = [
+    "//private:testlib.sh",
+    "//private:testlib.py",
+]
+
+# ---- flags ------------------------------------------------------------------
+
+# Evaluation tests: flag + context → value / variant / reason (JUnit XML).
+flagd_flags_test(
+    name = "flags_test",
+    srcs = ["//tests/testdata:cases/flags_test.json"],
+    flags = ["//tests/testdata:flags"],
+)
+
+# A deliberately wrong expectation; flags_failure_test runs it.
+flagd_flags_test(
+    name = "wrong_flags_test",
+    srcs = ["//tests/testdata:cases/wrong_test.json"],
+    flags = ["//tests/testdata:base"],
+    tags = ["manual"],
+)
+
+sh_test(
+    name = "flags_failure_test",
+    srcs = ["flags_failure_test.sh"],
+    args = [
+        "$(rootpath //private:flagd_test_trampoline.sh)",
+        "$(rootpath :wrong_flags_test_flagd)",
+        "$(rootpath :wrong_flags_test_inner)",
+    ] + ["$(rootpath {})".format(l) for l in _TESTLIB] + [
+        "$(rootpath //tests/testdata:cases/wrong_test.json)",
+    ],
+    data = _TESTLIB + [
+        ":wrong_flags_test_flagd",
+        ":wrong_flags_test_inner",
+        "//private:flagd_test_trampoline.sh",
+        "//tests/testdata:cases/wrong_test.json",
+    ],
+)
+
+# The validation action, run directly on good and bad files.
+sh_test(
+    name = "check_flags_test",
+    srcs = ["check_flags_test.sh"],
+    args = [
+        "$(rootpath //private:launcher.py)",
+        "$(rootpath //toolchain:current)",
+        "$(rootpath //tests/testdata:flags/base.json)",
+        "$(rootpath //tests/testdata:flags/overrides.yaml)",
+        "$(rootpath //tests/testdata:bad/bad_state.json)",
+        "$(rootpath //tests/testdata:bad/bad_default.json)",
+        "$(rootpath //tests/testdata:bad/bad_syntax.json)",
+        "$(rootpath //tests/testdata:bad/bad_targeting.yaml)",
+    ],
+    data = [
+        "//private:launcher.py",
+        "//tests/testdata:bad/bad_default.json",
+        "//tests/testdata:bad/bad_state.json",
+        "//tests/testdata:bad/bad_syntax.json",
+        "//tests/testdata:bad/bad_targeting.yaml",
+        "//tests/testdata:flags/base.json",
+        "//tests/testdata:flags/overrides.yaml",
+        "//toolchain:current",
+    ],
+)
+
+# ---- hermetic server ----------------------------------------------------------
+
+flagd_test(
+    name = "api_test",
+    srcs = ["api_test.sh"],
+    args = [
+        "one",
+        "'two words'",
+    ],
+    flags = ["//tests/testdata:flags"],
+)
+
+flagd_server(
+    name = "test_server",
+    extra_args = [
+        "-X",
+        "env=ci",
+    ],
+    flags = [
+        "//tests/testdata:flags",
+        "//tests/testdata:by_env",
+    ],
+    tags = ["manual"],
+)
+
+flagd_health_check(
+    name = "test_server_health",
+    server = ":test_server",
+    tags = ["manual"],
+)
+
+sh_test(
+    name = "server_test",
+    srcs = ["server_test.sh"],
+    args = [
+        "$(rootpath :test_server)",
+        "$(rootpath //private:testlib.py)",
+    ],
+    data = [
+        ":test_server",
+        "//private:testlib.py",
+    ],
+)
+
+sh_test(
+    name = "health_check_test",
+    srcs = ["health_check_test.sh"],
+    args = ["$(rootpath :test_server_health)"],
+    data = [":test_server_health"],
+)
+
+flagd_server(
+    name = "bad_flag_server",
+    extra_args = ["--no-such-flag"],
+    tags = ["manual"],
+)
+
+flagd_server(
+    name = "slow_server",
+    ready_timeout = "0.001",
+    tags = ["manual"],
+)
+
+flagd_test(
+    name = "failing_flagd_test",
+    srcs = ["never_runs.sh"],
+    extra_args = ["--no-such-flag"],
+    tags = ["manual"],
+)
+
+sh_test(
+    name = "server_failure_test",
+    srcs = ["server_failure_test.sh"],
+    args = [
+        "$(rootpath :bad_flag_server)",
+        "$(rootpath :slow_server)",
+        # failing_flagd_test's trampoline, run with the arguments its
+        # sh_test would pass (a test target's args don't apply as data).
+        "$(rootpath //private:flagd_test_trampoline.sh)",
+        "$(rootpath :failing_flagd_test_flagd)",
+        "$(rootpath :failing_flagd_test_inner)",
+    ] + ["$(rootpath {})".format(l) for l in _TESTLIB],
+    data = _TESTLIB + [
+        ":bad_flag_server",
+        ":failing_flagd_test_flagd",
+        ":failing_flagd_test_inner",
+        ":slow_server",
+        "//private:flagd_test_trampoline.sh",
+    ],
+)
+
+flagd_test(
+    name = "record_port",
+    srcs = ["record_port.sh"],
+    tags = ["manual"],
+)
+
+sh_test(
+    name = "server_cleanup_test",
+    srcs = ["server_cleanup_test.sh"],
+    args = [
+        "$(rootpath //private:flagd_test_trampoline.sh)",
+        "$(rootpath :record_port_flagd)",
+        "$(rootpath :record_port_inner)",
+    ] + ["$(rootpath {})".format(l) for l in _TESTLIB],
+    data = _TESTLIB + [
+        ":record_port_flagd",
+        ":record_port_inner",
+        "//private:flagd_test_trampoline.sh",
+    ],
+)
+
+# flagd_server as a rules_itest service.
+flagd_server(
+    name = "itest_server",
+    flags = ["//tests/testdata:flags"],
+    tags = ["manual"],
+)
+
+flagd_health_check(
+    name = "itest_server_health",
+    server = ":itest_server",
+    tags = ["manual"],
+)
+
+itest_service(
+    name = "flagd_svc",
+    exe = ":itest_server",
+    health_check = ":itest_server_health",
+    tags = ["manual"],
+)
+
+sh_test(
+    name = "itest_test_bin",
+    srcs = ["itest_test.sh"],
+    data = ["//private:testlib.py"],
+    tags = ["manual"],
+)
+
+service_test(
+    name = "itest_test",
+    services = [":flagd_svc"],
+    test = ":itest_test_bin",
+)
+
+# ---- cluster manifest ------------------------------------------------------------
+
+flagd_manifest(
+    name = "flags_manifest",
+    flags = ["//tests/testdata:flags"],
+)
+
+flagd_manifest(
+    name = "base_manifest",
+    flags = ["//tests/testdata:base"],
+    replicas = 2,
+)
+
+sh_test(
+    name = "manifest_test",
+    srcs = ["manifest_test.sh"],
+    args = [
+        "$(rootpath :flags_manifest)",
+        "$(rootpath :base_manifest)",
+        "$(rootpath //private:versions.bzl)",
+    ],
+    data = [
+        ":base_manifest",
+        ":flags_manifest",
+        "//private:versions.bzl",
+    ],
+)
+
+sh_test(
+    name = "checksums_test",
+    srcs = ["checksums_test.sh"],
+    data = ["//private:versions.bzl"],
+)
+
+analysis_test_suite(name = "analysis_tests")

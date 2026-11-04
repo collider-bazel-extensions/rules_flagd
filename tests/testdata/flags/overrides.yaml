@@ -1,0 +1,8 @@
+# Loaded after base.json, so its `color` replaces base.json's.
+flags:
+  color:
+    state: ENABLED
+    variants:
+      red: "#ff0000"
+      green: "#00ff00"
+    defaultVariant: green

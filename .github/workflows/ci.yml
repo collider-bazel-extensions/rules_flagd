@@ -1,0 +1,91 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  hermetic:
+    # flagd_flags checks, flag evaluation tests, the hermetic server /
+    # flagd_test suite, manifest + analysis tests and the pins. No
+    # container runtime needed; flagd comes from the pinned release tarball.
+    name: bazel test (ubuntu-latest, hermetic)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-hermetic
+          repository-cache: true
+
+      - name: Verify NO host flagd on PATH
+        run: |
+          if command -v flagd >/dev/null 2>&1; then
+            echo "FAIL: flagd found at $(command -v flagd); the hermetic toolchain test would be meaningless" >&2
+            exit 1
+          fi
+
+      # `bazel build //...` would download every platform's flagd tarball
+      # (the per-platform toolchain targets); target paths instead.
+      # Building the smoke also builds its manifest and checks its flags.
+      - name: bazel build
+        run: bazel build //:defs //private/... //toolchain:current //tests/... //tests/install_smoke:smoke_test
+
+      - name: bazel test
+        run: bazel test //tests/... --test_output=errors
+
+      - name: Pins match GitHub's asset digests and ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: tools/update_checksums.sh --check
+
+      - name: No flagd processes left behind
+        if: always()
+        run: |
+          if pgrep -x flagd_linux_x86; then echo "FAIL: flagd processes left running" >&2; exit 1; fi
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bazel-testlogs-hermetic
+          path: bazel-testlogs/
+          if-no-files-found: ignore
+
+  install_smoke:
+    # kind + flagd_install (namespace `features`); OFREP and sync checks
+    # through kubectl port-forward.
+    name: install smoke (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}-install-smoke
+          repository-cache: true
+
+      - name: Verify Docker is available
+        run: docker version
+
+      - name: bazel test //tests/install_smoke:smoke_test
+        run: bazel test //tests/install_smoke:smoke_test --test_output=streamed --test_timeout=900
+
+      - name: No kind clusters left behind
+        if: always()
+        run: |
+          # rules_kind deletes its cluster even when the test fails.
+          left=$(docker ps -a --filter label=io.x-k8s.kind.cluster --format '{{.Names}}')
+          if [[ -n "$left" ]]; then echo "FAIL: kind node containers left: $left" >&2; exit 1; fi
+
+      - name: Upload test logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bazel-testlogs-install-smoke
+          path: bazel-testlogs/
+          if-no-files-found: ignore

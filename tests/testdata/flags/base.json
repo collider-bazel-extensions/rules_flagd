@@ -1,0 +1,50 @@
+{
+  "$schema": "https://flagd.dev/schema/v0/flags.json",
+  "$evaluators": {
+    "is-staff": {"ends_with": [{"var": "email"}, "@example.com"]}
+  },
+  "flags": {
+    "new-checkout": {
+      "state": "ENABLED",
+      "variants": {"on": true, "off": false},
+      "defaultVariant": "off",
+      "targeting": {"if": [{"$ref": "is-staff"}, "on", "off"]}
+    },
+    "color": {
+      "state": "ENABLED",
+      "variants": {"red": "#ff0000", "blue": "#0000ff"},
+      "defaultVariant": "red"
+    },
+    "discount": {
+      "state": "ENABLED",
+      "variants": {"none": 0, "small": 5, "big": 20},
+      "defaultVariant": "none",
+      "targeting": {
+        "if": [
+          {"==": [{"var": "tier"}, "gold"]}, "big",
+          {"in": [{"var": "region"}, ["eu", "uk"]]}, "small",
+          null
+        ]
+      }
+    },
+    "banner": {
+      "state": "ENABLED",
+      "variants": {
+        "default": {"text": "Welcome", "dismissible": true},
+        "sale": {"text": "Sale!", "dismissible": false}
+      },
+      "defaultVariant": "default"
+    },
+    "rollout": {
+      "state": "ENABLED",
+      "variants": {"new": true, "old": false},
+      "defaultVariant": "old",
+      "targeting": {"fractional": [["new", 50], ["old", 50]]}
+    },
+    "retired": {
+      "state": "DISABLED",
+      "variants": {"on": true, "off": false},
+      "defaultVariant": "off"
+    }
+  }
+}

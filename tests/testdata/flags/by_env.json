@@ -1,0 +1,10 @@
+{
+  "flags": {
+    "by-env": {
+      "state": "ENABLED",
+      "variants": {"ci-on": "ci-on", "off": "off"},
+      "defaultVariant": "off",
+      "targeting": {"if": [{"==": [{"var": "env"}, "ci"]}, "ci-on", "off"]}
+    }
+  }
+}

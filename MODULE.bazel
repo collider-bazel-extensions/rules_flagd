@@ -1,0 +1,68 @@
+"""rules_flagd — hermetic flagd (OpenFeature) primitives for Bazel.
+
+Three families in one repo:
+
+  Flags (build time):
+    flagd_flags         — flag definition files; flagd itself loads each
+                          one as a validation action on every build
+    flagd_flags_test    — flag evaluation tests: flag + context → expected
+                          value / variant / reason (JUnit XML)
+
+  Hermetic server (test-time):
+    flagd_server        — long-running flagd; writes $TEST_TMPDIR/<name>.env
+                          when /readyz answers
+    flagd_health_check  — pairs with flagd_server
+    flagd_test          — sh_test macro: auto-launched flagd with runtime
+                          flag overrides
+
+  Cluster install (kind / production-shaped):
+    flagd_manifest / flagd_install / flagd_install_health_check
+
+Pinned: flagd v0.18.2 (binaries and image).
+"""
+
+module(
+    name = "rules_flagd",
+    version = "0.1.0",
+)
+
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "platforms", version = "1.0.0")
+
+# rules_shell is part of the public surface — flagd_test is an sh_test
+# macro. Bazel 8+ removed `native.sh_test`.
+bazel_dep(name = "rules_shell", version = "0.8.0")
+
+# Public binary toolchain. Per-platform repos (flagd_<ver>_<plat>) come
+# from the `flagd` extension, which only honours the root module's tags —
+# consumers declare the same version.
+flagd = use_extension("//:extensions.bzl", "flagd")
+flagd.version(version = "0.18.2")
+use_repo(
+    flagd,
+    "flagd_0_18_2_darwin_amd64",
+    "flagd_0_18_2_darwin_arm64",
+    "flagd_0_18_2_linux_amd64",
+    "flagd_0_18_2_linux_arm64",
+)
+register_toolchains("@rules_flagd//toolchain:all")
+
+# rules_kubectl is a public dep — flagd_install is a thin macro around
+# `kubectl_apply`.
+bazel_dep(name = "rules_kubectl", version = "0.2.0")
+git_override(
+    module_name = "rules_kubectl",
+    remote = "https://github.com/collider-bazel-extensions/rules_kubectl",
+    commit = "81b60ab80df46b64c612f2576ffef0a7af98ccb6",  # v0.2.0
+)
+
+# ---- dev-only: smoke compositions ------------------------------------------
+
+bazel_dep(name = "rules_itest", version = "0.0.52", dev_dependency = True)
+
+bazel_dep(name = "rules_kind", version = "0.3.0", dev_dependency = True)
+git_override(
+    module_name = "rules_kind",
+    remote = "https://github.com/collider-bazel-extensions/rules_kind",
+    commit = "12a73e02fe4b9400d3dc733a3d80ce06c47b6411",  # v0.3.0 — confirmed deletion + sweep, RULES_KIND_MAX_CLUSTERS
+)

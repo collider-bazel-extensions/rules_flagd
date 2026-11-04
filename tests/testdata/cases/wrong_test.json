@@ -1,0 +1,9 @@
+{
+  "tests": [
+    {"name": "deliberately wrong expectation",
+     "flag": "discount", "context": {"tier": "gold"},
+     "expect": {"value": 5, "variant": "big"}},
+    {"name": "this one passes",
+     "flag": "color", "expect": {"value": "#ff0000"}}
+  ]
+}
