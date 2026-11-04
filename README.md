@@ -44,7 +44,18 @@ use_repo(
 )
 ```
 
-The `flagd` extension only honours the root module's `version` tags (the `mod.is_root` guard used across this organization), so declare it in your own `MODULE.bazel`. rules_flagd registers the toolchains itself. To pin by archive instead, replace the first `git_override` with an `archive_override` of `https://github.com/collider-bazel-extensions/rules_flagd/archive/refs/tags/v0.1.0.tar.gz` (`strip_prefix = "rules_flagd-0.1.0"`) and its `integrity`.
+To pin by archive and integrity instead of a git tag, replace the first `git_override` with:
+
+```python
+archive_override(
+    module_name = "rules_flagd",
+    urls = ["https://github.com/collider-bazel-extensions/rules_flagd/archive/refs/tags/v0.1.0.tar.gz"],
+    strip_prefix = "rules_flagd-0.1.0",
+    integrity = "sha256-AKNm5re1O9ZodAzpqcXAEq072kl5BzIP/BF550msum4=",
+)
+```
+
+The `flagd` extension only honours the root module's `version` tags (the `mod.is_root` guard used across this organization), so declare it in your own `MODULE.bazel`. rules_flagd registers the toolchains itself.
 
 ## Flags and evaluation tests
 
