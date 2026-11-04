@@ -4,6 +4,7 @@ FlagdBinaryInfo = provider(
     doc = "flagd toolchain binary.",
     fields = {
         "version":   "string — pinned flagd version",
+        "image":     "string — the same version's image, by digest (flagd_install)",
         "flagd_bin": "File — the flagd executable",
     },
 )

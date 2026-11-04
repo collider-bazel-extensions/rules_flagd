@@ -1,0 +1,1 @@
+{"flags": {"greeting": {"state": "ENABLED", "variants": {"hi": "hello"}, "defaultVariant": "hi"}}}

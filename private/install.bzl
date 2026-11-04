@@ -13,7 +13,6 @@ them in `namespace`.
 load("@rules_kubectl//:defs.bzl", "kubectl_apply", "kubectl_apply_health_check")
 load(":flags.bzl", "flag_sources")
 load(":providers.bzl", "FlagdFlagsInfo")
-load(":versions.bzl", "FLAGD_IMAGE")
 
 _DEPLOY = "deploy/flagd"
 
@@ -23,11 +22,14 @@ def _flagd_manifest_impl(ctx):
         fail("{}: flags is empty; flagd_manifest needs at least one flag file.".format(ctx.label))
     if ctx.attr.replicas < 1:
         fail("{}: replicas = {}: must be at least 1.".format(ctx.label, ctx.attr.replicas))
+    # Default: the image of the version the toolchain resolved, so the
+    # deployed flagd matches the one tests run.
+    image = ctx.attr.image or ctx.toolchains["//toolchain:flagd"].flagd.image
     out = ctx.actions.declare_file(ctx.label.name + ".yaml")
     ctx.actions.run_shell(
         command = 'exec python3 "$@"',
         arguments = [ctx.file._script.path, ctx.file._template.path, out.path,
-                     ctx.attr.image, str(ctx.attr.replicas)] + [f.path for f in sources],
+                     image, str(ctx.attr.replicas)] + [f.path for f in sources],
         inputs = sources + [ctx.file._script, ctx.file._template],
         outputs = [out],
         use_default_shell_env = True,
@@ -46,13 +48,14 @@ flagd_manifest = rule(
             doc = "flagd_flags targets, merged in order (later wins).",
         ),
         "image": attr.string(
-            default = FLAGD_IMAGE,
-            doc = "flagd image. Default: the pinned release, by digest.",
+            doc = "flagd image. Default: the image of the flagd version the " +
+                  "toolchain resolved (flagd.version()), by digest.",
         ),
         "replicas": attr.int(default = 1, doc = "Deployment replicas."),
         "_script": attr.label(default = "//private:manifest.py", allow_single_file = True),
         "_template": attr.label(default = "//private/manifests:flagd.yaml.tmpl", allow_single_file = True),
     },
+    toolchains = ["//toolchain:flagd"],
 )
 
 def flagd_install(
@@ -71,7 +74,7 @@ def flagd_install(
       flags: flagd_flags targets, merged in order (later wins).
       namespace: namespace to install into (created if missing).
       replicas: Deployment replicas.
-      image: flagd image; default the pinned release by digest.
+      image: flagd image; default the selected flagd version's image, by digest.
       wait_timeout: rollout wait.
       **kwargs: forwarded to kubectl_apply (tags, visibility,
         wait_for_rollouts, ...).

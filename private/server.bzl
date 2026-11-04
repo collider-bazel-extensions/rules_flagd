@@ -11,9 +11,12 @@ a writable overrides source, waits for GET /readyz, then writes
     FLAGD_OFREP_PORT / FLAGD_MANAGEMENT_PORT
     FLAGD_URL / FLAGD_OFREP_URL    http://127.0.0.1:<port>
     FLAGD_OVERRIDES_FILE           the overrides source
+    FLAGD_CONTROL_URL              POST /stop, /start (same ports, same overrides)
+    FLAGD_ENV_FILE                 this file
     FLAGD                          /abs/path/to/flagd
 
-and runs until SIGTERM. `flagd_health_check` exits 0 iff that file
+and runs until SIGTERM. With FLAGD_INSTANCE=<id> in its environment the
+same target runs as another replica: own ports, `<name>@<id>.env`. `flagd_health_check` exits 0 iff that file
 exists; it drops into `itest_service.health_check`.
 """
 
@@ -101,11 +104,17 @@ naming the cause and printing flagd's log.
 # ---- flagd_health_check -----------------------------------------------------
 
 def _flagd_health_check_impl(ctx):
+    instance = ""
+    if ctx.attr.instance:
+        ok = ctx.attr.instance.replace("_", "a").replace("-", "a").isalnum()
+        if not ok:
+            fail("{}: instance = {}: use letters, digits, _ and -.".format(ctx.label, repr(ctx.attr.instance)))
+        instance = "@" + ctx.attr.instance
     wrapper = ctx.actions.declare_file(ctx.label.name + ".sh")
     ctx.actions.expand_template(
         template = ctx.file._tmpl,
         output = wrapper,
-        substitutions = {"__ENV_FILE_NAME__": ctx.attr.server.label.name + ".env"},
+        substitutions = {"__ENV_FILE_NAME__": ctx.attr.server.label.name + instance + ".env"},
         is_executable = True,
     )
     return [DefaultInfo(executable = wrapper)]
@@ -118,6 +127,10 @@ flagd_health_check = rule(
             mandatory = True,
             providers = [FlagdServerInfo],
             doc = "The flagd_server this check pairs with.",
+        ),
+        "instance": attr.string(
+            doc = "Pair with a replica started with FLAGD_INSTANCE=<instance> " +
+                  "(e.g. an itest_service with env = {\"FLAGD_INSTANCE\": \"b\"}).",
         ),
         "_tmpl": attr.label(default = "//private:health_check.sh.tmpl", allow_single_file = True),
     },

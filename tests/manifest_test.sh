@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # flagd_manifest: a ConfigMap key per flag file in source order, matching
-# --uri args, the pinned image by digest, no namespace, and a flags hash
+# --uri args, the selected version's image by digest, no namespace, and a flags hash
 # that changes with the flags.
 #
 # Argv: <manifest for :flags> <manifest for :base> <versions.bzl>
@@ -17,9 +17,11 @@ grep -q '^        "new-checkout": {$' "$M" || fail "JSON body not indented under
 args=$(grep -A1 -- '- --uri' "$M" | grep 'file:' | sed 's/.*file://')
 [[ "$args" == $'/etc/flagd/00-base.json\n/etc/flagd/01-overrides.yaml' ]] || fail "uri args: $args"
 
-image=$(sed -n 's/^FLAGD_IMAGE = "\(.*\)"$/\1/p' "$V")
-[[ "$image" == *@sha256:* ]] || fail "FLAGD_IMAGE not digest-pinned: $image"
-grep -q "image: $image\$" "$M" || fail "manifest image is not FLAGD_IMAGE"
+# The image of the version the toolchain resolved (DEFAULT_VERSION here).
+default=$(sed -n 's/^DEFAULT_VERSION = "\(.*\)"$/\1/p' "$V")
+image=$(sed -n "s/^    \"$default\": \"\(ghcr[^\"]*\)\",\$/\1/p" "$V")
+[[ "$image" == "ghcr.io/open-feature/flagd:v$default@sha256:"* ]] || fail "no digest-pinned image for $default: $image"
+grep -q "image: $image\$" "$M" || fail "manifest image is not FLAGD_IMAGES[$default]"
 grep -q '^  namespace:' "$M" && fail "manifest pins a namespace"
 
 h1=$(sed -n 's/.*rules-flagd\/flags-sha256: "\(.*\)"/\1/p' "$M")

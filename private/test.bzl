@@ -94,6 +94,7 @@ def flagd_flags_test(
         name,
         srcs,
         flags,
+        require_coverage = False,
         extra_args = None,
         tags = None,
         **kwargs):
@@ -122,6 +123,8 @@ def flagd_flags_test(
       name: target name.
       srcs: JSON test files.
       flags: flagd_flags targets under test, merged in order.
+      require_coverage: fail unless every flag defined in `flags` has at
+        least one case (a JUnit "coverage" case names the untested ones).
       extra_args: extra `flagd start` flags (e.g. ["-X", "env=prod"]).
       tags: sh_test tags.
       **kwargs: forwarded to flagd_test (size, timeout, ...).
@@ -132,7 +135,8 @@ def flagd_flags_test(
         flags = flags,
         extra_args = extra_args,
         data = srcs,
-        args = ["$(rootpaths {})".format(s) for s in srcs],
+        args = (["--require-coverage"] if require_coverage else []) +
+               ["$(rootpaths {})".format(s) for s in srcs],
         tags = tags,
         **kwargs
     )

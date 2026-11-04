@@ -12,8 +12,11 @@ $FLAGD_SYNC_PORT; standard library only.
   testlib.py set-flags FILE                 replace the runtime overrides with FILE's flags
   testlib.py set-flag KEY FLAG_JSON         add / replace one override
   testlib.py clear-flags                    remove every override
-  testlib.py run-cases [--junit PATH] FILE...
-                                            flagd_flags_test: evaluate each case, compare
+  testlib.py control /stop|/start           stop flagd / start it again (same ports)
+  testlib.py run-cases [--junit PATH] [--require-coverage] FILE...
+                                            flagd_flags_test: evaluate each case, compare;
+                                            with --require-coverage, every configured
+                                            flag needs at least one case
 
 Overrides are the server's last flag source (highest precedence). Every
 change is tagged with a generation in the source's metadata, and the
@@ -138,7 +141,15 @@ def _compare(case, got):
     return problems
 
 
-def run_cases(files, junit=None):
+def configured_flags():
+    """Keys from the configured sources (not the overrides), recorded by
+    the launcher in sources.json next to the overrides file."""
+    path = os.path.join(os.path.dirname(os.environ["FLAGD_OVERRIDES_FILE"]), "sources.json")
+    with open(path) as f:
+        return sorted(json.load(f))
+
+
+def run_cases(files, junit=None, require_coverage=False):
     suites = []
     failed = total = 0
     for path in files:
@@ -171,6 +182,19 @@ def run_cases(files, junit=None):
                 print(f"ok   {os.path.basename(path)}: {name}")
             results.append((name, problems))
         suites.append((os.path.basename(path), results))
+    if require_coverage:
+        tested = {c.get("flag") for path in files for c in json.load(open(path)).get("tests", [])}
+        missing = [k for k in configured_flags() if k not in tested]
+        total += 1
+        if missing:
+            failed += 1
+            msg = "no case for: " + ", ".join(missing)
+            print(f"FAIL coverage: {len(missing)} configured flag(s) untested: {', '.join(missing)}",
+                  file=sys.stderr)
+        else:
+            msg = None
+            print("ok   coverage: every configured flag has a case")
+        suites.append(("coverage", [("every configured flag has a case", [msg] if msg else [])]))
     if junit:
         _junit(junit, suites)
     print(f"{total - failed}/{total} flag evaluation cases passed")
@@ -239,11 +263,24 @@ def main(argv):
         _write_overrides(doc)
     elif cmd == "clear-flags":
         _write_overrides({"flags": {}})
+    elif cmd == "control":
+        url = os.environ["FLAGD_CONTROL_URL"] + rest[0]
+        req = urllib.request.Request(url, data=b"", method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                r.read()
+        except urllib.error.HTTPError as e:
+            print(f"flagd{rest[0].replace('/', '_')}: {e.code}: {e.read().decode().strip()}",
+                  file=sys.stderr)
+            return 1
     elif cmd == "run-cases":
-        junit = None
-        if rest and rest[0] == "--junit":
-            junit, rest = rest[1], rest[2:]
-        return run_cases(rest, junit or None)
+        junit, coverage = None, False
+        while rest and rest[0] in ("--junit", "--require-coverage"):
+            if rest[0] == "--junit":
+                junit, rest = rest[1], rest[2:]
+            else:
+                coverage, rest = True, rest[1:]
+        return run_cases(rest, junit or None, coverage)
     else:
         print(f"testlib.py: unknown command {cmd}", file=sys.stderr)
         return 2

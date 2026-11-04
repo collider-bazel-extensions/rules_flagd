@@ -38,6 +38,10 @@ jobs:
       - name: bazel test
         run: bazel test //tests/... --test_output=errors
 
+      - name: A consumer pinning flagd 0.17.1 gets its binary and image
+        working-directory: tests/version_select
+        run: bazel test //... --test_output=errors
+
       - name: Pins match GitHub's asset digests and ghcr.io
         env:
           GITHUB_TOKEN: ${{ github.token }}

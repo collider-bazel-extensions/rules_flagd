@@ -1,0 +1,22 @@
+"""A consumer that pins flagd 0.17.1: the toolchain binary and the image
+flagd_install deploys must both be 0.17.1 (rules_flagd#1). Run from CI:
+
+    cd tests/version_select && bazel test //...
+"""
+
+module(name = "version_select")
+
+bazel_dep(name = "rules_flagd", version = "0.2.0")
+local_path_override(module_name = "rules_flagd", path = "../..")
+
+bazel_dep(name = "rules_kubectl", version = "0.2.0")
+git_override(
+    module_name = "rules_kubectl",
+    remote = "https://github.com/collider-bazel-extensions/rules_kubectl",
+    commit = "81b60ab80df46b64c612f2576ffef0a7af98ccb6",  # v0.2.0
+)
+
+bazel_dep(name = "rules_shell", version = "0.8.0")
+
+flagd = use_extension("@rules_flagd//:extensions.bzl", "flagd")
+flagd.version(version = "0.17.1")

@@ -1,0 +1,5 @@
+{
+  "tests": [
+    {"name": "banner is off by default", "flag": "banner", "expect": {"reason": "STATIC"}}
+  ]
+}

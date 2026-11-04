@@ -22,7 +22,7 @@ bazel_dep(name = "rules_flagd", version = "0.1.0")
 git_override(
     module_name = "rules_flagd",
     remote = "https://github.com/collider-bazel-extensions/rules_flagd",
-    tag = "v0.1.0",
+    tag = "v0.2.0",
 )
 
 # rules_flagd depends on rules_kubectl, which isn't in the BCR either.
@@ -33,16 +33,16 @@ git_override(
     commit = "81b60ab80df46b64c612f2576ffef0a7af98ccb6",  # v0.2.0
 )
 
-flagd = use_extension("@rules_flagd//:extensions.bzl", "flagd")
-flagd.version(version = "0.18.2")
-use_repo(
-    flagd,
-    "flagd_0_18_2_darwin_amd64",
-    "flagd_0_18_2_darwin_arm64",
-    "flagd_0_18_2_linux_amd64",
-    "flagd_0_18_2_linux_arm64",
-)
 ```
+
+That's all: rules_flagd registers its toolchain and fetches flagd only for the platform a build needs, at 0.18.2 by default. To run the version your cluster runs, name it in your own `MODULE.bazel` (only the root module's tag counts):
+
+```python
+flagd = use_extension("@rules_flagd//:extensions.bzl", "flagd")
+flagd.version(version = "0.17.1")   # pinned: 0.18.2, 0.17.1
+```
+
+The toolchain and the image `flagd_install` deploys both follow it, so tests and the cluster run the same flagd. Upgrading from v0.1: the `use_repo(flagd, "flagd_0_18_2_…")` lines are no longer needed. They still work, for the selected version.
 
 To pin by archive and integrity instead of a git tag, replace the first `git_override` with:
 
@@ -54,8 +54,6 @@ archive_override(
     integrity = "sha256-AKNm5re1O9ZodAzpqcXAEq072kl5BzIP/BF550msum4=",
 )
 ```
-
-The `flagd` extension only honours the root module's `version` tags (the `mod.is_root` guard used across this organization), so declare it in your own `MODULE.bazel`. rules_flagd registers the toolchains itself.
 
 ## Flags and evaluation tests
 
@@ -71,6 +69,7 @@ flagd_flags_test(
     name = "flags_test",
     srcs = ["flags_test.json"],
     flags = [":flags"],
+    require_coverage = True,   # every flag in :flags needs a case
 )
 ```
 
@@ -90,14 +89,24 @@ flagd_flags_test(
   - Bad JSON or YAML, a `defaultVariant` that isn't a variant, and similar errors: flagd refuses the file, so the build fails.
   - Anything the [flagd schema](https://flagd.dev/reference/schema/) rejects, such as `state: MAYBE`, a variant whose type differs from its siblings, or an unknown targeting operator. flagd only logs these and serves the flag anyway. They fail the build too, unless `strict = False` makes them warnings.
 
-  flagd's own report says where the problem is, e.g. `at '/flags/x/state': value must be one of 'ENABLED', 'DISABLED'`.
+  flagd's report is a tree with a branch per alternative the schema allows: a flag's variants may be booleans, strings, numbers or objects, so a bad `state` is reported once per variant type, next to type mismatches that only explain why the *other* alternatives failed. rules_flagd prints the cause first, then the full report:
+
+  ```
+  flagd_flags: flags/base.json: does not conform to the flagd schema (error):
+    at '/flags/x/state': value must be one of 'ENABLED', 'DISABLED'
+    full report:
+      ...
+  ```
+
+  The cause is the errors every alternative shares. If they share none, it is the closest branches': the deepest, then those with the fewest errors. For variants of mixed types that gives both sides, e.g. `variants/off: got string, want boolean` and `variants/on: got boolean, want string`.
 - **Merge order.** flagd merges sources in order: a key in a later file replaces the same key from an earlier one. `deps` come before `srcs`.
 - **Test files** are JSON. A file-level `context` is merged into every case. `expect` checks only the keys it has: `value`, `variant`, `reason`, `errorCode`. A failing case prints the flag, the context, what it expected and flagd's full answer.
+- **Coverage.** With `require_coverage = True`, the test also fails if a flag defined in `flags` has no case. An extra JUnit case, `coverage`, names the untested flags: `FAIL coverage: 2 configured flag(s) untested: banner, rollout`.
 
 | Rule | Attributes |
 |---|---|
 | `flagd_flags` | `srcs` (`.json`, `.yaml`, `.yml`); `deps` (other `flagd_flags`); `strict` (default `True`) |
-| `flagd_flags_test` | `srcs` (JSON test files); `flags`; `extra_args` (e.g. `["-X", "env=prod"]` for a static context value) |
+| `flagd_flags_test` | `srcs` (JSON test files); `flags`; `require_coverage` (default `False`); `extra_args` (e.g. `["-X", "env=prod"]` for a static context value) |
 
 ## Hermetic server
 
@@ -134,6 +143,8 @@ What the test sees:
 | `FLAGD_URL` | `http://127.0.0.1:$FLAGD_PORT`, for the Connect/HTTP evaluation API |
 | `FLAGD_MANAGEMENT_PORT` | `/healthz`, `/readyz`, `/metrics` |
 | `FLAGD_OVERRIDES_FILE` | the runtime overrides source (below) |
+| `FLAGD_CONTROL_URL` | the launcher's control endpoint (`flagd_stop` / `flagd_start`) |
+| `FLAGD_ENV_FILE` | this env file. `FLAGD_MAIN_ENV_FILE` is the test's first server, for switching back from a replica. |
 | `FLAGD` | the flagd binary |
 | `FLAGD_TESTLIB` | shell helpers (below) |
 
@@ -146,6 +157,10 @@ What the test sees:
 | `flagd_set_flag KEY FLAG_JSON` | adds or replaces one override |
 | `flagd_set_flags FILE.json` | replaces all overrides with the file's `flags` |
 | `flagd_clear_flags` | removes every override |
+| `flagd_stop` / `flagd_start` | stops flagd / starts it again **on the same ports, with the same sources and overrides**, and waits until it's ready |
+| `flagd_start_instance ID` | starts another replica of this test's `flagd_server`, with its own ports and overrides; prints its env file |
+| `flagd_use ENV_FILE` | points the helpers (and every `FLAGD_*` variable) at a replica; `flagd_use "$FLAGD_MAIN_ENV_FILE"` goes back |
+| `flagd_on ENV_FILE CMD…` | runs one command against a replica, e.g. `flagd_on "$b" flagd_variant rollout "$ctx"` |
 
 **Runtime overrides.** The server loads one more source after yours, an overrides file with the highest precedence. The `set` and `clear` helpers rewrite it and return only once flagd serves the change, typically within 100 ms. When an override is removed, the configured definition of that key comes back. flagd itself would drop the key (see DESIGN.md). Overrides are JSON.
 
@@ -156,7 +171,19 @@ What the test sees:
 | `extra_args` | `[]` | extra `flagd start` flags, e.g. `["-X", "env=ci"]` (a static context value) or `["--debug"]` |
 | `args`, `env`, `data`, `deps`, `size`, `timeout`, `tags`, … | | as for `sh_test` (`flagd_test` only) |
 
-If flagd exits or isn't ready within `ready_timeout`, the test fails, says why and shows flagd's log; the test body never runs. Each test gets its own flagd (its own ports and overrides), so tests are safe under `--jobs=N`. flagd is stopped when the test ends. The server ignores any `FLAGD_*` variables in its own environment.
+Restarts and replicas, for example to check that fractional assignment is stable:
+
+```sh
+source "$FLAGD_TESTLIB"
+ctx='{"targetingKey": "user-42"}'
+v=$(flagd_variant rollout "$ctx")
+flagd_stop; flagd_start                              # same ports, same overrides
+[[ "$(flagd_variant rollout "$ctx")" == "$v" ]]
+b=$(flagd_start_instance b)                          # a second flagd over the same flags
+[[ "$(flagd_on "$b" flagd_variant rollout "$ctx")" == "$v" ]]
+```
+
+Replicas are stopped with the test. If flagd exits or isn't ready within `ready_timeout`, the test fails, says why and shows flagd's log; the test body never runs. Each test gets its own flagd (its own ports and overrides), so tests are safe under `--jobs=N`. flagd is stopped when the test ends. The server ignores any `FLAGD_*` variables in its own environment.
 
 ### `flagd_server` + `flagd_health_check` (rules_itest)
 
@@ -172,6 +199,21 @@ itest_service(
 ```
 
 The server writes `$TEST_TMPDIR/flagd.env` (named after the target) with the variables above. A service or test in any language reads it, or takes `FLAGD_HOST` / `FLAGD_PORT` from a wrapper. SIGTERM stops flagd, removes the file and exits 0.
+
+**Several replicas of one target.** With `FLAGD_INSTANCE=<id>` in its environment, the server runs as a separate replica: its own ports, state and overrides, writing `$TEST_TMPDIR/<name>@<id>.env`. Its health check takes `instance`:
+
+```python
+flagd_health_check(name = "flagd_b_health", server = ":flagd", instance = "b", tags = ["manual"])
+
+itest_service(
+    name = "flagd_b_svc",
+    exe = ":flagd",
+    env = {"FLAGD_INSTANCE": "b"},
+    health_check = ":flagd_b_health",
+)
+```
+
+`POST $FLAGD_CONTROL_URL/stop` and `/start` restart a server from any language.
 
 ## Cluster install
 
@@ -191,13 +233,13 @@ itest_service(
 
 - **What's applied** (`flagd_manifest`):
   - a ConfigMap `flagd-flags` with your files, keyed `00-<name>`, `01-<name>`, … in source order;
-  - a Deployment `flagd` running `ghcr.io/open-feature/flagd:v0.18.2` by digest, non-root with a read-only root filesystem, over those files;
+  - a Deployment `flagd` running the selected version's image (`ghcr.io/open-feature/flagd:v0.18.2` by default) by digest, non-root with a read-only root filesystem, over those files;
   - a Service `flagd` with ports 8013 (evaluation), 8014 (management), 8015 (sync) and 8016 (OFREP).
 
   In-cluster providers use `flagd.<namespace>.svc:8013`.
 - **Namespace:** the objects carry none, so `namespace` really places them (default `flagd`).
 - **New flags roll the pods.** The pod template carries a hash of the flags.
-- **Other attributes:** `replicas` (default 1) and `image` (default: the pinned digest).
+- **Other attributes:** `replicas` (default 1) and `image` (default: the selected version's image, by digest).
 - **Your own pipeline:** `flagd_manifest` is public, so a GitOps or Argo CD setup can ship the same manifest the tests use.
 - **Smoke test:** `tests/install_smoke/` installs into kind (namespace `features`) and evaluates through `kubectl port-forward svc/flagd`.
 
@@ -205,20 +247,21 @@ itest_service(
 
 | Component | Version | Source |
 |---|---|---|
-| flagd binary | `0.18.2` | https://github.com/open-feature/flagd/releases (GitHub asset digests) |
-| flagd image | `v0.18.2@sha256:a1b6de22…` | `ghcr.io/open-feature/flagd` (multi-arch index) |
+| flagd binary | `0.18.2` (default), `0.17.1` | https://github.com/open-feature/flagd/releases (GitHub asset digests) |
+| flagd image | `v0.18.2@sha256:a1b6de22…`, `v0.17.1@sha256:594f9808…` | `ghcr.io/open-feature/flagd` (multi-arch index) |
 
 flagd publishes no checksum file. `tools/update_checksums.sh <version>` therefore pins:
 - each platform's tarball, from GitHub's asset digest, cross-checked by downloading it;
 - the image's index digest, from ghcr.io.
 
-`--check` verifies every pin without writing anything; CI runs it.
+`--check` verifies every pin without writing anything; CI runs it. To change the default, update `DEFAULT_VERSION` and `flagd.version()` in rules_flagd's `MODULE.bazel`.
 
 ## Development
 
 ```sh
 bazel test //tests/...                                                # no container runtime
 bazel test //tests/install_smoke:smoke_test --test_output=streamed    # needs Docker or podman
+(cd tests/version_select && bazel test //...)                         # a consumer pinning 0.17.1
 ```
 
 See [DESIGN.md](DESIGN.md) for the architecture and trade-offs.
