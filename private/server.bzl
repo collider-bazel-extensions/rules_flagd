@@ -2,7 +2,7 @@
 
 `flagd_server` is a long-running executable (see launcher.py) that
 starts one flagd on four free 127.0.0.1 ports with its flag sources plus
-a writable overrides source, waits for GET /readyz, then writes
+a writable overrides source, waits for GET /readyz and every port to answer, then writes
 `$TEST_TMPDIR/<name>.env`:
 
     FLAGD_HOST=127.0.0.1
@@ -77,7 +77,7 @@ flagd_server = rule(
     executable = True,
     doc = """\
 Long-running flagd for tests and rules_itest compositions. Writes
-`$TEST_TMPDIR/<name>.env` once /readyz answers 200. If flagd refuses its
+`$TEST_TMPDIR/<name>.env` once /readyz answers 200 and every port answers. If flagd refuses its
 flags, exits, or isn't ready within `ready_timeout`, it exits non-zero,
 naming the cause and printing flagd's log.
 """,

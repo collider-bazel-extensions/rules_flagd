@@ -22,7 +22,7 @@ grep -q "unknown flag: --no-such-flag" <<<"$out" || fail "bad_flag: flagd log no
 echo "ok: flagd that can't start"
 
 run slow_server "$2"
-grep -q "flagd was not ready (GET /readyz) within 0.001s" <<<"$out" || fail "slow: cause not named: $out"
+grep -q "flagd was not ready (GET /readyz and every port answering) within 0.001s" <<<"$out" || fail "slow: cause not named: $out"
 echo "ok: readiness timeout"
 
 inner_tmp="$TEST_TMPDIR/inner"; mkdir -p "$inner_tmp"

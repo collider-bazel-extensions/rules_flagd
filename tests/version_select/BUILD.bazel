@@ -17,3 +17,15 @@ sh_test(
     args = ["$(rootpath :manifest)"],
     data = [":manifest"],
 )
+
+# v0.1's repo name, created because MODULE.bazel opts in.
+sh_test(
+    name = "v01_name_test",
+    srcs = ["v01_name_test.sh"],
+    args = ["$(rootpath @flagd_0_17_1_linux_amd64//:flagd_bin)"],
+    data = ["@flagd_0_17_1_linux_amd64//:flagd_bin"],
+    target_compatible_with = [
+        "@platforms//os:linux",
+        "@platforms//cpu:x86_64",
+    ],
+)

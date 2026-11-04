@@ -1,5 +1,7 @@
 """A consumer that pins flagd 0.17.1: the toolchain binary and the image
-flagd_install deploys must both be 0.17.1 (rules_flagd#1). Run from CI:
+flagd_install deploys must both be 0.17.1 (rules_flagd#1). It also opts in
+to v0.1's repo names and imports one, which must then exist (#3). Run from
+CI:
 
     cd tests/version_select && bazel test //...
 """
@@ -16,7 +18,9 @@ git_override(
     commit = "81b60ab80df46b64c612f2576ffef0a7af98ccb6",  # v0.2.0
 )
 
+bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_shell", version = "0.8.0")
 
 flagd = use_extension("@rules_flagd//:extensions.bzl", "flagd")
-flagd.version(version = "0.17.1")
+flagd.version(version = "0.17.1", v01_repo_names = True)
+use_repo(flagd, "flagd_0_17_1_linux_amd64")
