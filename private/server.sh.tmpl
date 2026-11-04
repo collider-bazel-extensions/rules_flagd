@@ -22,6 +22,13 @@ resolve() {
 
 name='__NAME__'
 tmp="${TEST_TMPDIR:-${TMPDIR:-/tmp}}"
+# FLAGD_INSTANCE=<id> runs another replica of this target: its own ports,
+# env file (<name>@<id>.env) and state directory.
+if [[ -n "${FLAGD_INSTANCE:-}" ]]; then
+  [[ "$FLAGD_INSTANCE" =~ ^[A-Za-z0-9_-]+$ ]] || {
+    echo "flagd_server: FLAGD_INSTANCE='$FLAGD_INSTANCE': use letters, digits, _ and -" >&2; exit 1; }
+  name="$name@$FLAGD_INSTANCE"
+fi
 
 # Resolve into variables first: a failing $(resolve) inside an argument
 # list would not stop the script under `set -e`.
@@ -35,5 +42,5 @@ exec python3 "$launcher" serve \
   --env-file "$tmp/$name.env" \
   --state-dir "$tmp/flagd-$name" \
   --ready-timeout '__READY_TIMEOUT__' \
-  "${sources[@]}" \
+  ${sources[@]+"${sources[@]}"} \
   -- __EXTRA_ARGS__ "$@"

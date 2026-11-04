@@ -24,6 +24,35 @@ flagd_flags_test(
     name = "flags_test",
     srcs = ["//tests/testdata:cases/flags_test.json"],
     flags = ["//tests/testdata:flags"],
+    require_coverage = True,
+)
+
+# Covers one of base's six flags; coverage_failure_test runs it.
+flagd_flags_test(
+    name = "uncovered_flags_test",
+    srcs = ["//tests/testdata:cases/one_flag.json"],
+    flags = ["//tests/testdata:base"],
+    require_coverage = True,
+    tags = ["manual"],
+)
+
+sh_test(
+    name = "coverage_failure_test",
+    srcs = ["coverage_failure_test.sh"],
+    args = [
+        "$(rootpath //private:flagd_test_trampoline.sh)",
+        "$(rootpath :uncovered_flags_test_flagd)",
+        "$(rootpath :uncovered_flags_test_inner)",
+    ] + ["$(rootpath {})".format(l) for l in _TESTLIB] + [
+        "--require-coverage",
+        "$(rootpath //tests/testdata:cases/one_flag.json)",
+    ],
+    data = _TESTLIB + [
+        ":uncovered_flags_test_flagd",
+        ":uncovered_flags_test_inner",
+        "//private:flagd_test_trampoline.sh",
+        "//tests/testdata:cases/one_flag.json",
+    ],
 )
 
 # A deliberately wrong expectation; flags_failure_test runs it.
@@ -65,10 +94,12 @@ sh_test(
         "$(rootpath //tests/testdata:bad/bad_default.json)",
         "$(rootpath //tests/testdata:bad/bad_syntax.json)",
         "$(rootpath //tests/testdata:bad/bad_targeting.yaml)",
+        "$(rootpath //tests/testdata:bad/bad_mixed_variants.json)",
     ],
     data = [
         "//private:launcher.py",
         "//tests/testdata:bad/bad_default.json",
+        "//tests/testdata:bad/bad_mixed_variants.json",
         "//tests/testdata:bad/bad_state.json",
         "//tests/testdata:bad/bad_syntax.json",
         "//tests/testdata:bad/bad_targeting.yaml",
@@ -190,7 +221,15 @@ sh_test(
     ],
 )
 
-# flagd_server as a rules_itest service.
+# Restart on the same ports, and a second replica of the same target.
+flagd_test(
+    name = "replicas_test",
+    srcs = ["replicas_test.sh"],
+    flags = ["//tests/testdata:flags"],
+)
+
+# flagd_server as a rules_itest service, twice: the second replica via
+# FLAGD_INSTANCE.
 flagd_server(
     name = "itest_server",
     flags = ["//tests/testdata:flags"],
@@ -210,6 +249,21 @@ itest_service(
     tags = ["manual"],
 )
 
+flagd_health_check(
+    name = "itest_server_b_health",
+    instance = "b",
+    server = ":itest_server",
+    tags = ["manual"],
+)
+
+itest_service(
+    name = "flagd_svc_b",
+    env = {"FLAGD_INSTANCE": "b"},
+    exe = ":itest_server",
+    health_check = ":itest_server_b_health",
+    tags = ["manual"],
+)
+
 sh_test(
     name = "itest_test_bin",
     srcs = ["itest_test.sh"],
@@ -219,7 +273,10 @@ sh_test(
 
 service_test(
     name = "itest_test",
-    services = [":flagd_svc"],
+    services = [
+        ":flagd_svc",
+        ":flagd_svc_b",
+    ],
     test = ":itest_test_bin",
 )
 

@@ -60,6 +60,12 @@ def analysis_test_suite(name):
     flagd_install(name = name + "_install_subject", flags = ["//tests/testdata:flags"], tags = ["manual"])
     flagd_install_health_check(name = name + "_install_health_subject", tags = ["manual"])
     flagd_server(name = name + "_bad_timeout_subject", ready_timeout = "soon", tags = ["manual"])
+    flagd_health_check(
+        name = name + "_bad_instance_subject",
+        instance = "b/../x",
+        server = ":" + name + "_server_subject",
+        tags = ["manual"],
+    )
     flagd_manifest(name = name + "_no_flags_subject", flags = [], tags = ["manual"])
     flagd_manifest(name = name + "_zero_replicas_subject", flags = ["//tests/testdata:base"],
                    replicas = 0, tags = ["manual"])
@@ -71,6 +77,7 @@ def analysis_test_suite(name):
         "_install_executable": (_has_executable_test, ":" + name + "_install_subject", None),
         "_install_health_executable": (_has_executable_test, ":" + name + "_install_health_subject", None),
         "_timeout": (_fails_test, ":" + name + "_bad_timeout_subject", "expected a positive number of seconds"),
+        "_instance": (_fails_test, ":" + name + "_bad_instance_subject", "use letters, digits, _ and -"),
         "_no_flags": (_fails_test, ":" + name + "_no_flags_subject", "needs at least one flag file"),
         "_replicas": (_fails_test, ":" + name + "_zero_replicas_subject", "must be at least 1"),
     }

@@ -27,9 +27,13 @@
         FLAGD_URL=http://127.0.0.1:<evaluation port>
         FLAGD_OFREP_URL=http://127.0.0.1:<OFREP port>
         FLAGD_OVERRIDES_FILE=<overrides source>
+        FLAGD_CONTROL_URL=http://127.0.0.1:<port>   (POST /stop, /start)
+        FLAGD_ENV_FILE=<this env file>
         FLAGD=<absolute path to the flagd binary>
-      SIGTERM / SIGINT stop flagd, remove the env file and exit 0; if flagd
-      dies, exits with its status.
+      The control endpoint stops flagd and starts it again on the same
+      ports, sources and overrides file. SIGTERM / SIGINT stop flagd,
+      remove the env file and exit 0; if flagd dies without being asked
+      to, exits with its status.
 
 In both modes a flagd that refuses its flags, exits, or isn't ready in
 time is an error that names the cause and prints flagd's log.
@@ -48,6 +52,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 _REFUSED = "error setting state"
 _SCHEMA = "does not conform to the schema"
@@ -100,21 +105,26 @@ def flagd_env(home):
     return env
 
 
-def start(flagd, sources, state_dir, ready_timeout, extra, procs):
+def start(flagd, sources, state_dir, ready_timeout, extra, procs, fixed_ports=None):
     """Start flagd and wait until /readyz answers 200. Returns
-    (proc, ports, log_path); ports maps evaluation/management/sync/ofrep."""
+    (proc, ports, log_path); ports maps evaluation/management/sync/ofrep.
+    With fixed_ports (a restart), uses those and doesn't retry a clash."""
     log_path = os.path.join(state_dir, "flagd.log")
     env = flagd_env(os.path.join(state_dir, "home"))
     for attempt in range(1, 6):
-        ev, mgmt, sync, ofrep = _free_ports(4)
-        ports = {"evaluation": ev, "management": mgmt, "sync": sync, "ofrep": ofrep}
+        if fixed_ports:
+            ports = dict(fixed_ports)
+        else:
+            ev, mgmt, sync, ofrep = _free_ports(4)
+            ports = {"evaluation": ev, "management": mgmt, "sync": sync, "ofrep": ofrep}
+        ev, mgmt, sync, ofrep = ports["evaluation"], ports["management"], ports["sync"], ports["ofrep"]
         cmd = [flagd, "start", "-p", str(ev), "-m", str(mgmt), "-g", str(sync), "-r", str(ofrep)]
         # fsnotify: changes apply in ~10 ms; the default `file:` provider
         # polls once a second.
         if sources:
             cmd += ["--sources", json.dumps([{"uri": s, "provider": "fsnotify"} for s in sources])]
         cmd += extra
-        with open(log_path, "w") as log:
+        with open(log_path, "a" if fixed_ports else "w") as log:
             proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT,
                                     stdin=subprocess.DEVNULL, env=env)
         procs.append(proc)
@@ -134,6 +144,9 @@ def start(flagd, sources, state_dir, ready_timeout, extra, procs):
             proc.kill()
             proc.wait()
         out = _read(log_path)
+        if fixed_ports and "address already in use" in out:
+            raise Failed(f"flagd could not listen on its ports again ({ports}); "
+                         f"another process took one. flagd log:\n{out}")
         if refused or _REFUSED in out:
             raise Failed("flagd refused the flags:\n" + _refusal(out))
         if timed_out:
@@ -167,6 +180,70 @@ def _schema_report(log):
     return None
 
 
+def schema_causes(report):
+    """The most specific failures in flagd's schema report.
+
+    The report is a tree: `'allOf' failed` nodes need every child,
+    `'anyOf'` / `'oneOf'` nodes list one failed branch per alternative (a
+    flag's variants may be booleans, strings, numbers or objects, so a bad
+    `state` fails once per variant type, next to type mismatches that
+    only explain why the *other* alternatives failed). For an alternative
+    node the causes are the errors common to every branch; if there are
+    none, the deepest branch's. Returns "at '<path>': <message>" lines.
+    """
+    nodes = []  # (depth, path, message)
+    for line in report.splitlines():
+        stripped = line.lstrip(" ")
+        if not stripped.startswith("- at '"):
+            continue
+        depth = (len(line) - len(stripped)) // 2
+        path, _, msg = stripped[len("- at '"):].partition("': ")
+        nodes.append((depth, path, msg.strip()))
+    if not nodes:
+        return []
+
+    def build(i):
+        depth, path, msg = nodes[i]
+        children, j = [], i + 1
+        while j < len(nodes) and nodes[j][0] > depth:
+            if nodes[j][0] == depth + 1:
+                children.append(j)
+            j += 1
+        return (path, msg, [build(c) for c in children])
+
+    def causes(node):
+        path, msg, kids = node
+        if not kids:
+            return [(path, msg)]
+        sets = [causes(k) for k in kids]
+        if "'allOf' failed" in msg:
+            out = []
+            for s in sets:
+                out += [c for c in s if c not in out]
+            return out
+        common = [c for c in sets[0] if all(c in s for s in sets[1:])]
+        if common:
+            return common
+        # No error shared by every alternative: the deepest branches are the
+        # closest matches (then those with fewest errors); equally close
+        # branches are all shown, e.g. variants of mixed types.
+        rank = lambda s: (max(p.count("/") for p, _ in s), -len(s))  # noqa: E731
+        best = max(rank(s) for s in sets)
+        out = []
+        for s in sets:
+            if rank(s) == best:
+                out += [c for c in s if c not in out]
+        return out
+
+    roots = [i for i, n in enumerate(nodes) if n[0] == nodes[0][0]]
+    out = []
+    for r in roots:
+        for c in causes(build(r)):
+            if c not in out:
+                out.append(c)
+    return [f"at '{p}': {m}" for p, m in out]
+
+
 def check(args):
     status = 0
     for path in args.files:
@@ -189,8 +266,12 @@ def check(args):
                 proc.wait()
             if report:
                 kind = "error" if args.strict else "warning"
+                causes = schema_causes(report)
+                summary = "".join(f"  {c}\n" for c in causes)
                 print(f"flagd_flags: {path}: does not conform to the flagd schema ({kind}):\n"
-                      f"{report}", file=sys.stderr)
+                      f"{summary}"
+                      f"  full report:\n"
+                      + "\n".join("  " + l for l in report.splitlines()), file=sys.stderr)
                 if args.strict:
                     status = 1
     if status == 0:
@@ -270,6 +351,60 @@ def serve(args):
         return 1
     with open(os.path.join(args.state_dir, "sources.json"), "w") as f:
         json.dump({k: v.get("source") for k, v in served.items()}, f)
+
+    server = {"proc": proc, "stopped": False}
+    lock = threading.Lock()
+
+    def control(path):
+        """POST /stop, /start: restart flagd on the same ports, with the
+        same sources and overrides file."""
+        if stopping:
+            return 503, "shutting down"
+        with lock:
+            p = server["proc"]
+            if path == "/stop":
+                server["stopped"] = True
+                if p.poll() is None:
+                    p.terminate()
+                    try:
+                        p.wait(10)
+                    except subprocess.TimeoutExpired:
+                        p.kill()
+                        p.wait()
+                _log("flagd stopped (control)")
+                return 200, "stopped"
+            if path == "/start":
+                if p.poll() is None:
+                    return 200, "already running"
+                try:
+                    new, _, _ = start(args.flagd, sources, args.state_dir, args.ready_timeout,
+                                      args.extra, procs, fixed_ports=ports)
+                except Failed as e:
+                    _log(str(e))
+                    return 500, str(e)
+                server["proc"], server["stopped"] = new, False
+                _log("flagd started again (control) on the same ports")
+                return 200, "started"
+        return 404, f"unknown control path {path}"
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            status, text = control(self.path)
+            body = (text + "\n").encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
     write_env(args.env_file, {
         "FLAGD_HOST": "127.0.0.1",
         "FLAGD_PORT": ev,
@@ -279,12 +414,32 @@ def serve(args):
         "FLAGD_URL": f"http://127.0.0.1:{ev}",
         "FLAGD_OFREP_URL": f"http://127.0.0.1:{ofrep}",
         "FLAGD_OVERRIDES_FILE": overrides,
+        "FLAGD_CONTROL_URL": f"http://127.0.0.1:{httpd.server_address[1]}",
+        "FLAGD_ENV_FILE": os.path.abspath(args.env_file),
         "FLAGD": os.path.abspath(args.flagd),
     })
     ready.append(True)
     _log(f"ready: evaluation {ev}, OFREP {ofrep}, sync {ports['sync']}; env file {args.env_file}")
 
-    rc = proc.wait()
+    # Run until signalled, or until flagd exits without being asked to.
+    rc = 0
+    while not stopping:
+        p = server["proc"]
+        if p.poll() is not None and not server["stopped"]:
+            with lock:  # not mid-restart
+                if server["proc"] is p and not server["stopped"]:
+                    rc = p.returncode
+                    break
+        time.sleep(0.1)
+    httpd.shutdown()
+    p = server["proc"]
+    if p.poll() is None:
+        p.terminate()
+        try:
+            p.wait(10)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
     try:
         os.remove(args.env_file)
     except FileNotFoundError:
@@ -292,7 +447,7 @@ def serve(args):
     if stopping:
         return 0
     _log(f"flagd exited with status {rc}. flagd log:\n{_read(log_path)}")
-    return rc or 1
+    return rc if rc > 0 else 1
 
 
 def main(argv):

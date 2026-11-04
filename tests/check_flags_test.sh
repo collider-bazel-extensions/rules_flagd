@@ -4,7 +4,7 @@
 # rejects schema violations only with --strict.
 #
 # Argv: <launcher.py> <flagd> <base.json> <overrides.yaml> <bad_state> <bad_default>
-#       <bad_syntax> <bad_targeting>
+#       <bad_syntax> <bad_targeting> <bad_mixed_variants>
 set -euo pipefail
 fail() { echo "FAIL: $*" >&2; exit 1; }
 r() {
@@ -16,7 +16,7 @@ r() {
 }
 LAUNCHER="$(r "$1")"; FLAGD="$(r "$2")"; shift 2
 GOOD_JSON="$(r "$1")"; GOOD_YAML="$(r "$2")"; BAD_STATE="$(r "$3")"; BAD_DEFAULT="$(r "$4")"
-BAD_SYNTAX="$(r "$5")"; BAD_TARGETING="$(r "$6")"
+BAD_SYNTAX="$(r "$5")"; BAD_TARGETING="$(r "$6")"; BAD_MIXED="$(r "$7")"
 m="$TEST_TMPDIR/marker"
 check() { rm -f "$m"; python3 "$LAUNCHER" check --flagd "$FLAGD" --marker "$m" "$@"; }
 
@@ -37,6 +37,16 @@ echo "ok: bad JSON"
 if out=$(check --strict "$BAD_STATE" 2>&1); then fail "schema violation accepted with --strict"; fi
 grep -q "does not conform to the flagd schema (error)" <<<"$out" || fail "schema error not reported: $out"
 grep -q "/flags/x/state': value must be one of 'ENABLED', 'DISABLED'" <<<"$out" || fail "schema detail missing: $out"
+# The cause comes first; the other alternatives' type mismatches only in the full report.
+summary=$(sed '/full report:/q' <<<"$out")
+[[ "$(sed -n 2p <<<"$summary")" == "  at '/flags/x/state': value must be one of 'ENABLED', 'DISABLED'" ]] \
+  || fail "cause not first: $out"
+grep -q "want number" <<<"$summary" && fail "branch noise in the summary: $summary"
+grep -q "want number" <<<"$out" || fail "full report dropped"
+if out=$(check --strict "$BAD_MIXED" 2>&1); then fail "mixed variant types accepted with --strict"; fi
+summary=$(sed '/full report:/q' <<<"$out")
+grep -q "at '/flags/x/variants/off': got string, want boolean" <<<"$summary" || fail "mixed: $out"
+grep -q "at '/flags/x/variants/on': got boolean, want string" <<<"$summary" || fail "mixed: $out"
 if out=$(check --strict "$BAD_TARGETING" 2>&1); then fail "unknown targeting operator accepted with --strict"; fi
 grep -q "/flags/x/targeting" <<<"$out" || fail "targeting violation not shown: $out"
 echo "ok: schema violations fail with --strict"

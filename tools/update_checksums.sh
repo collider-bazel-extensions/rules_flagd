@@ -2,7 +2,7 @@
 # Maintainer-time script: pin the flagd release tarballs and image in
 # private/versions.bzl.
 #
-#   tools/update_checksums.sh <version>   # add / re-pin <version> (and point FLAGD_IMAGE at it)
+#   tools/update_checksums.sh <version>   # add / re-pin <version> and its image in FLAGD_IMAGES
 #   tools/update_checksums.sh --check     # verify every pinned entry and the image
 #
 # flagd publishes no checksum file. The binary SHA-256s are the GitHub
@@ -83,13 +83,13 @@ print(" ".join(sorted(set(re.findall(r"^    \"([0-9][^\"]*)\": \{", open(sys.arg
             fi
         done < <(published "$ver")
     done
-    pinned=$(sed -n 's/^FLAGD_IMAGE = "\(.*\)"$/\1/p' private/versions.bzl)
-    tag=${pinned#*:v}; tag=${tag%@*}
-    if [[ "$(image "$tag")" == "$pinned" ]]; then
-        echo "OK    image $pinned"
-    else
-        echo "DRIFT image: pinned $pinned, registry has $(image "$tag")" >&2; status=1
-    fi
+    while read -r ver pinned; do
+        if [[ "$(image "$ver")" == "$pinned" ]]; then
+            echo "OK    image $pinned"
+        else
+            echo "DRIFT image $ver: pinned $pinned, registry has $(image "$ver")" >&2; status=1
+        fi
+    done < <(sed -n 's/^    "\([0-9][^"]*\)": "\(ghcr[^"]*\)",$/\1 \2/p' private/versions.bzl)
     exit "$status"
 fi
 
@@ -113,9 +113,12 @@ if pat.search(text):
     text = pat.sub(lambda m: entry, text)
 else:
     text = text.replace("FLAGD_VERSIONS = {\n", "FLAGD_VERSIONS = {\n" + entry, 1)
-text = re.sub(r'^FLAGD_IMAGE = ".*"$', f'FLAGD_IMAGE = "{img}"', text, flags=re.M)
-text = re.sub(r"^# The image flagd_install deploys: the v[0-9.]+ multi-arch index\.$",
-              f"# The image flagd_install deploys: the v{ver} multi-arch index.", text, flags=re.M)
+img_line = f'    "{ver}": "{img}",\n'
+img_pat = re.compile(r'^    "' + re.escape(ver) + r'": "ghcr[^"]*",\n', re.M)
+if img_pat.search(text):
+    text = img_pat.sub(lambda m: img_line, text)
+else:
+    text = text.replace("FLAGD_IMAGES = {\n", "FLAGD_IMAGES = {\n" + img_line, 1)
 open(path, "w").write(text)
 print(f"pinned {ver} for {len(rows)} platforms and {img} in {path}")
 PY

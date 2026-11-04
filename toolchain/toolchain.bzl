@@ -13,6 +13,7 @@ FLAGD_TOOLCHAIN_TYPE = Label("//toolchain:flagd")
 def _toolchain_impl(ctx):
     info = FlagdBinaryInfo(
         version   = ctx.attr.version,
+        image     = ctx.attr.image,
         flagd_bin = ctx.file.flagd_bin,
     )
     return [
@@ -27,6 +28,7 @@ flagd_toolchain = rule(
     implementation = _toolchain_impl,
     attrs = {
         "version":   attr.string(mandatory = True),
+        "image":     attr.string(mandatory = True),
         "flagd_bin": attr.label(allow_single_file = True, mandatory = True),
     },
 )

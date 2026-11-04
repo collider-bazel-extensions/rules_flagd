@@ -1,0 +1,19 @@
+load("@rules_flagd//:defs.bzl", "flagd_flags", "flagd_manifest", "flagd_test")
+load("@rules_shell//shell:sh_test.bzl", "sh_test")
+
+flagd_flags(name = "flags", srcs = ["flags.json"])
+
+flagd_test(
+    name = "binary_test",
+    srcs = ["binary_test.sh"],
+    flags = [":flags"],
+)
+
+flagd_manifest(name = "manifest", flags = [":flags"])
+
+sh_test(
+    name = "image_test",
+    srcs = ["image_test.sh"],
+    args = ["$(rootpath :manifest)"],
+    data = [":manifest"],
+)

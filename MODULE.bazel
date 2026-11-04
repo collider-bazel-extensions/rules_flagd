@@ -18,12 +18,12 @@ Three families in one repo:
   Cluster install (kind / production-shaped):
     flagd_manifest / flagd_install / flagd_install_health_check
 
-Pinned: flagd v0.18.2 (binaries and image).
+Pinned: flagd 0.18.2 (default) and 0.17.1, binaries and images.
 """
 
 module(
     name = "rules_flagd",
-    version = "0.1.0",
+    version = "0.2.0",
 )
 
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
@@ -33,17 +33,17 @@ bazel_dep(name = "platforms", version = "1.0.0")
 # macro. Bazel 8+ removed `native.sh_test`.
 bazel_dep(name = "rules_shell", version = "0.8.0")
 
-# Public binary toolchain. Per-platform repos (flagd_<ver>_<plat>) come
-# from the `flagd` extension, which only honours the root module's tags —
-# consumers declare the same version.
+# Public binary toolchain. The `flagd` extension creates flagd_<platform>
+# repos at the root module's flagd.version(), or at this module's when the
+# root names none.
 flagd = use_extension("//:extensions.bzl", "flagd")
 flagd.version(version = "0.18.2")
 use_repo(
     flagd,
-    "flagd_0_18_2_darwin_amd64",
-    "flagd_0_18_2_darwin_arm64",
-    "flagd_0_18_2_linux_amd64",
-    "flagd_0_18_2_linux_arm64",
+    "flagd_darwin_amd64",
+    "flagd_darwin_arm64",
+    "flagd_linux_amd64",
+    "flagd_linux_arm64",
 )
 register_toolchains("@rules_flagd//toolchain:all")
 

@@ -10,7 +10,15 @@ rules_flagd follows the shape of rules_prometheus and rules_alertmanager: a tool
 
 ## Toolchain
 
-Each release tarball holds a single binary named `flagd_<os>_<arch>`. The repository rule finds that one file and links it as `flagd`. flagd publishes no checksum file. The pins are therefore GitHub's per-asset `digest`, and `tools/update_checksums.sh` cross-checks each one against a download. The image for the install is pinned by its multi-arch index digest, which the same script fetches from ghcr.io. The extension is `mod.is_root`-guarded.
+Each release tarball holds a single binary named `flagd_<os>_<arch>`. The repository rule finds that one file and links it as `flagd`. flagd publishes no checksum file. The pins are therefore GitHub's per-asset `digest`, and `tools/update_checksums.sh` cross-checks each one against a download. Each version's image is pinned by its multi-arch index digest (`FLAGD_IMAGES`), which the same script fetches from ghcr.io.
+
+**Choosing the version (v0.2, #1).** In v0.1 `toolchain/BUILD.bazel` named the `flagd_0_18_2_*` repos and the version string, so `flagd.version()` could only select 0.18.2. Now:
+- **Repos named per platform:** `flagd_<platform>`. Each one declares its own `flagd_toolchain` with the version and that version's image.
+- **The root module's tag wins**, else rules_flagd's own, else `DEFAULT_VERSION`. This is the scheme rules_otel and rules_gitleaks use.
+- **The install follows it:** `flagd_manifest` takes its default image from the resolved toolchain. A consumer running flagd 0.17.1 in its cluster pins `flagd.version(version = "0.17.1")`, and tests and the install use the same version. `tests/version_select/`, a separate consumer module that CI runs, checks both.
+- **v0.1 names still resolve.** The extension also creates the `flagd_<ver>_<plat>` names for the selected version, so a v0.1 consumer's `use_repo(...)` keeps working. Repos are only fetched when used.
+
+Pinned versions: 0.18.2 (default) and 0.17.1.
 
 ## Validating with flagd itself
 
@@ -26,9 +34,16 @@ The schema is embedded in the binary, so the check needs no network. It needs on
 
 `strict` defaults to true because flagd serving a schema-invalid flag usually hides a bug. An unknown targeting operator, for example, quietly never matches.
 
+**Reading flagd's schema report (v0.2, #1).** flagd prints the validator's whole error tree. A flag's `variants` may be booleans, strings, numbers or objects (a `oneOf` / `anyOf` with one `allOf` branch per type). So a bad `state` appears once per branch, next to type mismatches that only explain why the other branches failed, plus the `/flags` "got object, want array" alternative. `launcher.py`'s `schema_causes` reads the tree:
+- an `allOf` node's causes are the union of its children's;
+- an `anyOf` / `oneOf` node's causes are the errors **every** alternative shares;
+- if the alternatives share none, the causes are the **closest** branches': the deepest, then those with the fewest errors, keeping every tied branch.
+
+Keeping ties matters for variants of mixed types: "off isn't a boolean" and "on isn't a string" are equally right. The causes are printed first, then the full report.
+
 ## Hermetic server
 
-- **Ports.** The launcher picks four free ports: evaluation, management, sync and OFREP. It retries with new ones on a clash. Ready means `GET /readyz` on the management port returns 200. If flagd refuses its flags at start, the launcher fails at once, without waiting for the timeout.
+- **Ports.** The launcher picks four free ports: evaluation, management, sync and OFREP. It retries with new ones on a clash, except on a restart (below). Ready means `GET /readyz` on the management port returns 200. If flagd refuses its flags at start, the launcher fails at once, without waiting for the timeout.
 - **Environment.** `FLAGD_HOST` / `FLAGD_PORT` are the variables OpenFeature's flagd providers read, so a service under test finds the server with no code changes. In return, the server itself runs without any `FLAGD_*` from its caller, because flagd reads those as configuration. `HOME` points at the state dir, so a user's `~/.agent.yaml` can't configure it either.
 - **fsnotify sources.** Sources are passed with `--sources` using the `fsnotify` provider. The default `file:` provider polls once a second. With fsnotify a change applies in about 10 ms, which keeps the override helpers fast.
 
@@ -41,6 +56,19 @@ Tests often need to flip a flag mid-test. The server appends one more source aft
 
    So the server loads writable copies of the configured sources, and records at start-up which source defines each key (`sources.json`). After removing overrides, the helpers rewrite the configured source of each removed key, and wait until flagd serves it from there again.
 
+### Restarts and replicas (v0.2, #1)
+
+Tests of fractional assignment need flagd restarted mid-test, and a second flagd over the same flags (another replica).
+
+- **Restart.** The launcher runs a small HTTP control endpoint (`FLAGD_CONTROL_URL`, `POST /stop` and `/start`), as rules_otel does.
+  - `/start` runs flagd again with the same sources, the same overrides file and the **same ports**, so the env file stays valid and providers reconnect. A port taken in the meantime is an error, not a silent move to new ports.
+  - A requested stop doesn't count as a crash. Only an exit the test didn't ask for stops the server.
+  - HTTP rather than signals, because `/start` must report whether flagd became ready again.
+- **Replicas.** `FLAGD_INSTANCE=<id>` in the server's environment makes it a separate replica: env file `<name>@<id>.env`, state directory `flagd-<name>@<id>`, its own ports and overrides.
+  - Inside a `flagd_test`, `flagd_start_instance` starts one, and the trampoline stops it with the test.
+  - Under rules_itest, an `itest_service` passes `env = {"FLAGD_INSTANCE": ...}`, and `flagd_health_check(instance = ...)` waits for the right file.
+  - `flagd_use` / `flagd_on` switch the helpers by sourcing a replica's env file. Every helper already reads its target from the `FLAGD_*` variables.
+
 ### `flagd_test` and `flagd_flags_test`
 
 `flagd_test` follows rules_nats' fixed trampoline (v0.1.1):
@@ -51,6 +79,8 @@ Tests often need to flip a flag mid-test. The server appends one more source aft
 `//tests:server_cleanup_test` fails if the trampoline `exec`s.
 
 `flagd_flags_test` is a `flagd_test` whose body is the case runner (`testlib.py run-cases`). There is no offline evaluator to call, so evaluation tests use the real server, about 0.5 s per target. Cases are JSON because the host's Python has no YAML parser; flag files can still be YAML, since flagd parses those. Results are written as JUnit XML to `$XML_OUTPUT_FILE`.
+
+**Coverage (v0.2, #1).** `require_coverage = True` fails the test if a flag defined in `flags` has no case. The set of flags is the configured sources' keys, as served at start-up (`sources.json`; overrides are empty then). It is reported as an extra JUnit case, `coverage`, naming the untested flags.
 
 ## Cluster install
 
