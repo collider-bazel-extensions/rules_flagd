@@ -49,9 +49,9 @@ To pin by archive and integrity instead of a git tag, replace the first `git_ove
 ```python
 archive_override(
     module_name = "rules_flagd",
-    urls = ["https://github.com/collider-bazel-extensions/rules_flagd/archive/refs/tags/v0.2.0.tar.gz"],
-    strip_prefix = "rules_flagd-0.2.0",
-    integrity = "sha256-9eYa0eYZe79YiszDttw6qHYemn2t1/NIdoKi0JpG3og=",
+    urls = ["https://github.com/collider-bazel-extensions/rules_flagd/archive/refs/tags/v0.3.0.tar.gz"],
+    strip_prefix = "rules_flagd-0.3.0",
+    integrity = "sha256-0hh43d5nPnPm/ePbCmLcb8VOxVkSN8QbxG7tPcdxbl0=",
 )
 ```
 
