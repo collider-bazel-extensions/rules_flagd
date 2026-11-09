@@ -18,11 +18,11 @@ No host `flagd` or Go needed: the binary comes from the pinned, SHA-256-verified
 ## Install (Bzlmod)
 
 ```python
-bazel_dep(name = "rules_flagd", version = "0.3.0")
+bazel_dep(name = "rules_flagd", version = "0.3.1")
 git_override(
     module_name = "rules_flagd",
     remote = "https://github.com/collider-bazel-extensions/rules_flagd",
-    tag = "v0.3.0",
+    tag = "v0.3.1",
 )
 
 # rules_flagd depends on rules_kubectl, which isn't in the BCR either.
@@ -49,11 +49,13 @@ To pin by archive and integrity instead of a git tag, replace the first `git_ove
 ```python
 archive_override(
     module_name = "rules_flagd",
-    urls = ["https://github.com/collider-bazel-extensions/rules_flagd/archive/refs/tags/v0.3.0.tar.gz"],
-    strip_prefix = "rules_flagd-0.3.0",
+    urls = ["https://github.com/collider-bazel-extensions/rules_flagd/archive/refs/tags/v0.3.1.tar.gz"],
+    strip_prefix = "rules_flagd-0.3.1",
     integrity = "sha256-0hh43d5nPnPm/ePbCmLcb8VOxVkSN8QbxG7tPcdxbl0=",
 )
 ```
+
+The release archive (the tag tarball) leaves out `tests/`, whose packages load dev-only modules, so `bazel query @rules_flagd//...` works for consumers pinning with `archive_override`. A `git_override` clone still contains `tests/`; name packages instead (for example `@rules_flagd//:all`).
 
 ## Flags and evaluation tests
 
