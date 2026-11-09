@@ -51,7 +51,7 @@ archive_override(
     module_name = "rules_flagd",
     urls = ["https://github.com/collider-bazel-extensions/rules_flagd/archive/refs/tags/v0.3.1.tar.gz"],
     strip_prefix = "rules_flagd-0.3.1",
-    integrity = "sha256-0hh43d5nPnPm/ePbCmLcb8VOxVkSN8QbxG7tPcdxbl0=",
+    integrity = "sha256-WefPJDIeEprW9DpV/bX+t7MkhjcR9JBXxg5m4nsSz/s=",
 )
 ```
 
