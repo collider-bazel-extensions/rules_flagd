@@ -95,6 +95,10 @@ Tests of fractional assignment need flagd restarted mid-test, and a second flagd
 - **Namespace.** Unlike the chart-rendered installs in this organization, the objects carry no namespace. So `flagd_install(namespace = ...)` really places them: rules_kubectl applies with `-n`.
 - **Flag changes.** A ConfigMap volume updates in place only after the kubelet's sync delay, up to about a minute. The hash in the pod template makes re-applying new flags roll the Deployment instead, which is deterministic. In the cluster, flagd keeps the default polling `file:` provider. Kubernetes updates ConfigMap volumes by swapping symlinks, which a stat-based poll follows reliably.
 
+## Release archive contents (v0.3.1)
+
+`tests/` is `export-ignore` (`.gitattributes`): its packages load the dev-only `rules_itest` and `rules_kind`, which made `@rules_flagd//...` unloadable for consumers. `REPO.bazel` `ignore_directories` would also hide `tests/` from this repo's own `bazel test //tests/...`, so it isn't used. A `git_override` clone (the README's first pin) still contains `tests/`. CI's `consumer` job queries `//...` from the commit's `git archive`.
+
 ## What this repo does not (yet) do
 
 - **The OpenFeature Operator.** No `FeatureFlag` / `FeatureFlagSource` rendering and no sidecar injection. It would compose with rules_certmanager.

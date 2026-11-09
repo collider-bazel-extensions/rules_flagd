@@ -18,6 +18,8 @@ It mirrors rules_prometheus's structure; see DESIGN.md.
 ```
 rules_flagd/
 ├── MODULE.bazel              # module; toolchain registration; dev deps (itest, kind)
+├── .gitattributes            # tests/ export-ignore: the release archive loads with //... for consumers
+├── .github/consumer/check.sh # CI: @rules_flagd//... loads from the commit's git archive
 ├── defs.bzl                  # public API re-exports
 ├── extensions.bzl            # `flagd.version()` → flagd_<plat> repos (root tag, else ours) + v0.1 names
 ├── private/
@@ -101,12 +103,13 @@ tools/update_checksums.sh 0.18.2      # re-pin binaries + image; --check to veri
 
 To clean up stray servers, use `pgrep -x flagd_linux_x86` (the process name), never `pkill -f` with a pattern. The pattern matches the shell running it.
 
-### Test results (last full run: 2026-11-04)
+### Test results (last full run: 2026-11-08)
 
 All 24 test targets in `//tests/...` pass on Linux x86_64 (flagd 0.18.2), 9 of them analysis tests; the kind smoke last ran (v0.2.0) on rootless podman and runs in CI. Other checks:
 - `tests/version_select` (a consumer pinning 0.17.1) gets the 0.17.1 binary and image, and with `v01_repo_names = True` a v0.1 repo name; CI runs it. Without the opt-in, a v0.1-style `use_repo` fails with "does not generate repository" (checked by hand).
 - 8 runs each of the server tests in parallel, the restart, restart-failure and replica tests included, passed with no stray processes.
 - `tools/update_checksums.sh --check` verifies every pin, both images included.
+- `.github/consumer/check.sh` (CI `consumer` job): the commit's `git archive` has no `tests/`, and `@rules_flagd//...` loads for a consumer module (v0.3.1; it failed on `tests/` loading the dev-only `rules_itest` / `rules_kind`).
 - Checked by hand:
   - a bad flag file fails `bazel build`, even with network blocked in the sandbox;
   - `strict = False` only warns;

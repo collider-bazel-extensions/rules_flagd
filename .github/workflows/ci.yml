@@ -60,6 +60,21 @@ jobs:
           path: bazel-testlogs/
           if-no-files-found: ignore
 
+  consumer:
+    # The release archive (git archive honours .gitattributes export-ignore,
+    # as GitHub's tag tarballs do) must load with //... for a consumer.
+    name: consumer (ubuntu-latest, git archive)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: bazel-contrib/setup-bazel@0.15.0
+        with:
+          bazelisk-cache: true
+          repository-cache: true
+
+      - name: Consumer check
+        run: .github/consumer/check.sh "$RUNNER_TEMP/consumer"
+
   install_smoke:
     # kind + flagd_install (namespace `features`); OFREP and sync checks
     # through kubectl port-forward.
