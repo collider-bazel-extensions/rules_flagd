@@ -18,11 +18,11 @@ No host `flagd` or Go needed: the binary comes from the pinned, SHA-256-verified
 ## Install (Bzlmod)
 
 ```python
-bazel_dep(name = "rules_flagd", version = "0.3.1")
+bazel_dep(name = "rules_flagd", version = "0.3.2")
 git_override(
     module_name = "rules_flagd",
     remote = "https://github.com/collider-bazel-extensions/rules_flagd",
-    tag = "v0.3.1",
+    tag = "v0.3.2",
 )
 
 # rules_flagd depends on rules_kubectl, which isn't in the BCR either.
@@ -49,8 +49,8 @@ To pin by archive and integrity instead of a git tag, replace the first `git_ove
 ```python
 archive_override(
     module_name = "rules_flagd",
-    urls = ["https://github.com/collider-bazel-extensions/rules_flagd/archive/refs/tags/v0.3.1.tar.gz"],
-    strip_prefix = "rules_flagd-0.3.1",
+    urls = ["https://github.com/collider-bazel-extensions/rules_flagd/archive/refs/tags/v0.3.2.tar.gz"],
+    strip_prefix = "rules_flagd-0.3.2",
     integrity = "sha256-WefPJDIeEprW9DpV/bX+t7MkhjcR9JBXxg5m4nsSz/s=",
 )
 ```
@@ -277,3 +277,9 @@ See [DESIGN.md](DESIGN.md) for the architecture and trade-offs.
 Want Bazel rules for another tool or service?
 [Request a rules package](https://github.com/collider-bazel-extensions/.github/issues/new?template=request-a-rules-package.yml).
 The [organization page](https://github.com/collider-bazel-extensions) lists every package.
+
+## License
+
+[Apache License 2.0](LICENSE) (SPDX: `Apache-2.0`).
+
+Manifests in `private/manifests/` that are rendered from upstream charts or releases remain under their upstream projects' licences.
